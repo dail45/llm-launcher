@@ -445,6 +445,7 @@ export const EN: Record<string, string> = {
  "Год": "Year",
  "API-ключей нет — роутер OpenAI доступен без токена. Создайте ключ во вкладке «Безопасность», и роутер начнёт его требовать.": "No API keys — the OpenAI router is open without a token. Create a key in the Security tab and the router will start requiring it.",
  "Аналитика": "Analytics",
+ "Очистить": "Clear",
  "Всего": "Total",
  "Входящие": "Input",
  "Входящие токены": "Input tokens",

@@ -107,7 +107,7 @@
   <span class="sp"></span>
   <div class="seg">{#each periods as p}<button class:on={period === p[0]} onclick={() => (period = p[0])}>{t(p[1])}</button>{/each}</div>
   <button onclick={exportCsv}>⇩ CSV</button>
-  <button class="ghost danger" title={t('Удалить всю статистику токенов?')} onclick={clearAll}>✕</button>
+  <button class="danger" title={t('Удалить всю статистику токенов?')} onclick={clearAll}>{t('Очистить')}</button>
 </div>
 
 <div class="cards">
@@ -141,8 +141,8 @@
           {@const y = H - ss.slice(0, k + 1).reduce((a, x) => a + x.h, 0)}
           <rect x={i * bw + bw * 0.15} y={y} width={Math.max(1, bw * 0.7)} height={s.h} fill={s.c} rx="1.5" />
         {/each}
-        {#if buckets.length <= 31 || i % Math.ceil(buckets.length / 24) === 0}
-          <text x={i * bw + bw / 2} y={H + 15} class="ax">{fmtT(b.t)}</text>
+        {#if i % Math.max(1, Math.ceil(buckets.length / 12)) === 0}
+          <text x={Math.max(i * bw + bw / 2, 22)} y={H + 15} class="ax">{fmtT(b.t)}</text>
         {/if}
       </g>
     {/each}

@@ -1,6 +1,7 @@
+import { lang } from './i18n.svelte'
 export function bytes(n: number | null | undefined, digits = 1): string {
   if (n == null || isNaN(n as number)) return '—'
-  const u = ['Б', 'КиБ', 'МиБ', 'ГиБ', 'ТиБ']
+  const u = lang.v === 'ru' ? ['Б', 'КиБ', 'МиБ', 'ГиБ', 'ТиБ'] : ['B', 'KiB', 'MiB', 'GiB', 'TiB']
   let i = 0
   let v = n as number
   while (Math.abs(v) >= 1024 && i < u.length - 1) { v /= 1024; i++ }

@@ -1006,8 +1006,13 @@ struct HfSearchQ {
 async fn hf_search(State(app): State<AppRef>, _a: Admin, Query(q): Query<HfSearchQ>) -> R<J> {
     j(crate::hf::search(&app, &q.q, q.sort.as_deref().unwrap_or("downloads"), q.limit.unwrap_or(40), q.author.as_deref()).await?)
 }
-async fn hf_files(State(app): State<AppRef>, _a: Admin, Query(q): Query<RepoQ>) -> R<J> {
-    j(crate::hf::files(&app, &q.repo).await?)
+#[derive(Deserialize)]
+struct HfFilesQ {
+    repo: String,
+    backend: Option<String>,
+}
+async fn hf_files(State(app): State<AppRef>, _a: Admin, Query(q): Query<HfFilesQ>) -> R<J> {
+    j(crate::hf::files(&app, &q.repo, q.backend.as_deref()).await?)
 }
 async fn hf_readme(State(app): State<AppRef>, _a: Admin, Query(q): Query<RepoQ>) -> R<J> {
     j(json!({"readme": crate::hf::readme(&app, &q.repo).await?}))

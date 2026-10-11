@@ -173,7 +173,7 @@
               <td>{k.name}</td><td><code>{k.prefix}…</code></td><td class="small">{k.scopes.join(', ')}</td>
               <td class="small">{k.can_load ? t('загрузка') : ''} {k.can_manage ? t('управление') : ''}</td>
               <td class="small">{date(k.last_used)}</td><td class="small">{k.expires_at ? date(k.expires_at) : '∞'}</td>
-              <td class="row nw"><button class="sm ghost" onclick={() => (keyForm = { ...k, scopes: k.scopes.join(', '), expires: k.expires_at ? new Date(k.expires_at * 1000).toISOString().slice(0, 10) : '' })}>✎</button><button class="sm ghost danger" onclick={() => delKey(k)}>✕</button></td>
+              <td class="nw" style="text-align:right"><div class="row" style="justify-content:flex-end"><button class="sm ghost" onclick={() => (keyForm = { ...k, scopes: k.scopes.join(', '), expires: k.expires_at ? new Date(k.expires_at * 1000).toISOString().slice(0, 10) : '' })}>✎</button><button class="sm ghost danger" onclick={() => delKey(k)}>✕</button></div></td>
             </tr>
           {/each}
         </tbody>

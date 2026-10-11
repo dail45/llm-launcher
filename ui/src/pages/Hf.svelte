@@ -45,7 +45,7 @@
     readme = ''
     est = null
     filesLoading = true
-    try { files = await api.get('/api/hf/files' + q({ repo: id })) } catch (e) { app.err(e) } finally { filesLoading = false }
+    try { files = await api.get('/api/hf/files' + q({ repo: id, backend: estBackend })) } catch (e) { app.err(e) } finally { filesLoading = false }
   }
   async function loadReadme() {
     showReadme = true
@@ -125,7 +125,7 @@
     <div class="row small" style="margin-bottom:10px">
       <span class="muted">{t('Оценка для')}:</span>
       ctx <input type="number" bind:value={estCtx} style="width:90px" step="1024" />
-      <select bind:value={estBackend}>{#each backends as b}<option value={b.id}>{b.name}</option>{/each}</select>
+      <select bind:value={estBackend} onchange={() => repo && openRepo(repo)}>{#each backends as b}<option value={b.id}>{b.name}</option>{/each}</select>
     </div>
     <div class="grid" style="grid-template-columns:minmax(0,1fr) {est ? '380px' : '0px'}">
       <div class="card" style="padding:0">
@@ -145,9 +145,11 @@
                 </td>
                 <td class="small">{bytes(f.size)}</td>
                 <td>{#if !f.is_mmproj}<span class="badge {fitCls(f.fit)}" title={f.fit_note}>{fitTxt(f.fit)}</span>{/if}</td>
-                <td class="row nw" style="justify-content:flex-end">
-                  {#if !f.is_mmproj}<button class="sm" disabled={estLoading && estFor === f.name} onclick={() => estimate(f)}>{estLoading && estFor === f.name ? '…' : t('Оценить')}</button>{/if}
-                  <button class="sm primary" disabled={!!f.local_model_id} onclick={() => dl(f)}>⇩</button>
+                <td class="nw" style="text-align:right">
+                  <div class="row" style="justify-content:flex-end">
+                    {#if !f.is_mmproj}<button class="sm" disabled={estLoading && estFor === f.name} onclick={() => estimate(f)}>{estLoading && estFor === f.name ? '…' : t('Оценить')}</button>{/if}
+                    <button class="sm primary" disabled={!!f.local_model_id} onclick={() => dl(f)}>⇩</button>
+                  </div>
                 </td>
               </tr>
             {/each}
@@ -156,7 +158,7 @@
         {#if !filesLoading && !files.length}<div class="empty">{t('GGUF-файлов не найдено')}</div>{/if}
       </div>
       {#if est}
-        <div class="card" style="align-self:start">
+        <div class="card" style="align-self:start;position:sticky;top:12px">
           <div class="row"><b class="ell small">{estFor}</b><span class="sp"></span><button class="ghost sm" onclick={() => (est = null)}>✕</button></div>
           <div class="small muted" style="margin:6px 0">{est.info.arch} · {est.info.n_layers} {t('слоёв')} · ctx max {est.info.ctx_max || '?'}</div>
           <MemBar est={est.estimate} />
@@ -186,11 +188,11 @@
                 {#if d.status === 'running' && d.speed_bps > 0}· {Math.round((d.total - d.done) / d.speed_bps / 60)} {t('мин')}{/if}</div>
             </td>
             <td><span class="badge {d.status === 'done' ? 'ok' : d.status === 'failed' ? 'bad' : d.status === 'running' ? 'info' : ''}">{t(d.status)}</span></td>
-            <td class="row nw" style="justify-content:flex-end">
+            <td class="nw" style="text-align:right"><div class="row" style="justify-content:flex-end">
               {#if d.status === 'running' || d.status === 'queued'}<button class="sm" onclick={() => pause(d)}>⏸</button>{/if}
               {#if d.status === 'paused' || d.status === 'failed'}<button class="sm" onclick={() => resume(d)}>▶</button>{/if}
               <button class="sm ghost" onclick={() => remove(d)}>✕</button>
-            </td>
+            </div></td>
           </tr>
         {/each}
       </tbody>

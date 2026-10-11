@@ -92,7 +92,7 @@ pub async fn search(app: &App, q: &str, sort: &str, limit: u32, author: Option<&
         .collect())
 }
 
-pub async fn files(app: &App, repo: &str) -> Result<Vec<HfFile>> {
+pub async fn files(app: &App, repo: &str, backend_id: Option<&str>) -> Result<Vec<HfFile>> {
     check_repo(repo)?;
     let url = format!("{}/api/models/{repo}/tree/main?recursive=true", endpoint(app));
     let v: serde_json::Value = req(app, &url).send().await?.error_for_status()?.json().await?;
@@ -122,7 +122,14 @@ pub async fn files(app: &App, repo: &str) -> Result<Vec<HfFile>> {
         singles.push((k.rsplit('/').next().unwrap_or(&k).to_string(), v.into_iter().map(|x| x.1).collect()));
     }
     let snap = app.snapshot.read().clone();
-    let vram: u64 = snap.gpus.iter().map(|g| g.free_bytes).sum();
+    // Same device source as the detailed estimate: GPUs reported by the chosen llama.cpp
+    // build (matched to real adapters); fall back to all detected GPUs.
+    let backend = match backend_id.filter(|s| !s.is_empty()) {
+        Some(id) => app.backend(id).ok(),
+        None => app.default_backend(),
+    };
+    let slots = backend.as_ref().map(|b| app.device_slots(b, &[])).unwrap_or_default();
+    let vram: u64 = if slots.is_empty() { snap.gpus.iter().map(|g| g.free_bytes).sum() } else { slots.iter().map(|d| d.free_bytes).sum() };
     let ram = snap.ram_available;
     let local: Vec<crate::types::Model> = app.store.list("models").unwrap_or_default();
     let mut out: Vec<HfFile> = singles

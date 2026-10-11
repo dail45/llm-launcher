@@ -24,8 +24,9 @@ RUN npm run build
 
 # ---------- toolchain (cached as a layer, rebuilt only when this block changes) ----------
 FROM rust:${RUST_VERSION}-bookworm AS toolchain
+# appindicator: tauri-cli checks for it on the (Linux) host when the app uses tray-icon
 RUN apt-get update \
- && apt-get install -y --no-install-recommends clang lld llvm nsis \
+ && apt-get install -y --no-install-recommends clang lld llvm nsis libayatana-appindicator3-dev \
  && rm -rf /var/lib/apt/lists/*
 RUN rustup target add x86_64-pc-windows-msvc
 RUN cargo install --locked cargo-xwin \

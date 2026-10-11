@@ -132,7 +132,7 @@
       </div>
       {#if app.status.lan_ip}<div class="small muted">{t('IP этого компьютера в сети')}: <code>{app.status.lan_ip}</code></div>{/if}
       <label class="chk"><input type="checkbox" bind:checked={s.local_no_auth} /> {t('Не спрашивать пароль на этом компьютере (127.0.0.1)')}</label>
-      <label class="chk"><input type="checkbox" bind:checked={s.router_require_key} /> {t('Роутер требует API-ключ для запросов не с этого компьютера')}</label>
+      <div class="small muted">{keys.length ? t('Роутер требует API-ключ (есть ключи во вкладке «Безопасность»).') : t('API-ключей нет — роутер OpenAI доступен без токена. Создайте ключ во вкладке «Безопасность», и роутер начнёт его требовать.')}</div>
       <label class="chk"><input type="checkbox" bind:checked={s.log_request_bodies} /> {t('Логировать тела запросов (для отладки)')}</label>
       <div class="grid g3">
         <label class="field"><span>{t('Разрешённые подсети (CIDR)')}</span><textarea rows="3" value={asText(s.allowed_subnets)} oninput={(e) => (s.allowed_subnets = e.currentTarget.value)} placeholder="192.168.1.0/24"></textarea><span class="hint">{t('Пусто — любые')}</span></label>
@@ -197,6 +197,7 @@
       <label class="field"><span>{t('Запас VRAM, МиБ')}</span><input type="number" bind:value={s.vram_margin_mib} /></label>
       <label class="field"><span>{t('Накладные CUDA/драйвера на GPU, МиБ')}</span><input type="number" bind:value={s.gpu_overhead_mib} /></label>
       <label class="field"><span>{t('Интервал мониторинга, мс')}</span><input type="number" bind:value={s.poll_interval_ms} /></label>
+      <label class="field"><span>{t('Хранить статистику токенов, дней')}</span><input type="number" min="0" bind:value={s.usage_retention_days} /><span class="hint">0 — {t('бессрочно')}</span></label>
       <label class="chk"><input type="checkbox" bind:checked={s.swap_mode} /> {t('Режим «одна модель»: при запуске выгружать остальные')}</label>
       <label class="chk"><input type="checkbox" bind:checked={s.auto_restart} /> {t('Перезапускать упавшие инстансы')}</label>
       <label class="field"><span>{t('Попыток перезапуска')}</span><input type="number" bind:value={s.max_restart_attempts} /></label>

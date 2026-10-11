@@ -64,11 +64,20 @@ curl -s -XPOST $API/auth/password -H 'content-type: application/json' -d '{"pass
 TOK=$(curl -s -XPOST $API/auth/login -H 'X-Forwarded-For: 192.168.1.50' -H 'content-type: application/json' -d '{"password":"supersecret1"}' | j 'd["access_token"]')
 check "remote with jwt" "$(curl -s -o /dev/null -w '%{http_code}' -H 'X-Forwarded-For: 192.168.1.50' -H "Authorization: Bearer $TOK" $API/presets)" "200"
 check "bad password" "$(curl -s -o /dev/null -w '%{http_code}' -XPOST $API/auth/login -H 'X-Forwarded-For: 192.168.1.51' -H 'content-type: application/json' -d '{"password":"nope"}')" "401"
+check "open router w/o keys" "$(curl -s -o /dev/null -w '%{http_code}' -H 'X-Forwarded-For: 10.0.0.5' -XPOST $RT/v1/chat/completions -d '{"model":"coder"}')" "200"
 KEY=$(curl -s -XPOST $API/keys -H 'content-type: application/json' -d '{"name":"webui","scopes":["coder"],"can_load":true}' | j 'd["secret"]')
 check "key allowed alias" "$(curl -s -o /dev/null -w '%{http_code}' -H 'X-Forwarded-For: 10.0.0.5' -H "Authorization: Bearer $KEY" -XPOST $RT/v1/chat/completions -d '{"model":"coder"}')" "200"
 check "key forbidden alias" "$(curl -s -o /dev/null -w '%{http_code}' -H 'X-Forwarded-For: 10.0.0.5' -H "Authorization: Bearer $KEY" -XPOST $RT/v1/chat/completions -d '{"model":"broken"}')" "403"
 check "key cannot manage" "$(curl -s -o /dev/null -w '%{http_code}' -H 'X-Forwarded-For: 10.0.0.5' -H "Authorization: Bearer $KEY" $API/presets)" "403"
 check "no key remote router" "$(curl -s -o /dev/null -w '%{http_code}' -H 'X-Forwarded-For: 10.0.0.5' -XPOST $RT/v1/chat/completions -d '{"model":"coder"}')" "401"
+sleep 0.5
+AN="$API/analytics?from=0&to=99999999999"
+check "usage cached tokens" "$(curl -s "$AN&group=model" | j 'd["totals"]["cached"] >= 40 and d["totals"]["prompt"] > d["totals"]["cached"]')" "True"
+check "usage by model" "$(curl -s "$AN&group=model" | j 'd["groups"][0]["key"]')" "tiny-model-Q4_K_M.gguf"
+check "usage by preset" "$(curl -s "$AN&group=preset" | j 'any(g["label"]=="Tiny" for g in d["groups"])')" "True"
+check "usage by user (key)" "$(curl -s "$AN&group=user" | j '[(g["label"],g["requests"]) for g in d["groups"] if g["label"]=="webui"]')" "[('webui', 1)]"
+check "usage series" "$(curl -s "$AN&group=alias&bucket=86400" | j 'sum(x["completion"] for x in d["series"]) == d["totals"]["completion"] > 0')" "True"
+check "usage csv" "$(curl -s "$API/analytics/export?from=0&to=99999999999" | head -1)" "ts,preset,model,alias,user,ip,path,status,prompt,cached,completion,ms,tps"
 check "export" "$(curl -s $API/presets/export | j 'len(d["presets"])')" "2"
 check "backup zip" "$(curl -s $API/backup | head -c 2)" "PK"
 check "ui served" "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8090/)" "200"

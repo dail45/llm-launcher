@@ -90,7 +90,7 @@ async fn forward_native(app: AppRef, alias: String, rest: String, req: Request) 
     let bytes = axum::body::to_bytes(body, MAX_BODY).await.unwrap_or_default();
     let q = parts.uri.query().map(|q| format!("?{q}")).unwrap_or_default();
     let path = format!("/{rest}{q}");
-    forward(&app, inst, parts.method, &path, &parts.headers, bytes, LogCtx { alias: name, principal: p.label(), ip: meta.ip.to_string(), path: path.clone() }).await
+    forward(&app, inst, parts.method, &path, &parts.headers, bytes, LogCtx { alias: name, principal: p.label(), user_id: p.user().0, user: p.user().1, ip: meta.ip.to_string(), path: path.clone() }).await
 }
 
 /// Generic proxy for /v1/* and llama-server native endpoints. Model chosen from JSON body or ?model=.
@@ -144,12 +144,16 @@ pub async fn proxy_inner(app: AppRef, p: Principal, ip: String, method: Method, 
         Ok(i) => i,
         Err(e) => return oai_error(StatusCode::SERVICE_UNAVAILABLE, &e.to_string(), "model_load_failed"),
     };
-    forward(&app, inst, method, &path, &headers, bytes, LogCtx { alias, principal: p.label(), ip, path: path.clone() }).await
+    let (user_id, user) = p.user();
+    forward(&app, inst, method, &path, &headers, bytes, LogCtx { alias, principal: p.label(), user_id, user, ip, path: path.clone() }).await
 }
 
 pub struct LogCtx {
     pub alias: String,
     pub principal: String,
+    /// API key id ("" when the request had no key)
+    pub user_id: String,
+    pub user: String,
     pub ip: String,
     pub path: String,
 }
@@ -175,31 +179,109 @@ impl Drop for Guard {
             "ip": self.ctx.ip, "path": self.ctx.path.split('?').next().unwrap_or(""), "status": self.status,
             "ms": self.started.elapsed().as_millis() as u64, "stream": self.stream,
         });
-        // timings/usage from the final chunk or body
-        if let Some(i) = text.rfind("\"timings\"").or_else(|| text.rfind("\"usage\"")) {
-            let seg = &text[i..];
-            let num = |k: &str| -> Option<f64> {
-                let p = seg.find(&format!("\"{k}\""))?;
-                let rest = &seg[p + k.len() + 2..];
-                let rest = rest.trim_start_matches([':', ' ']);
-                let end = rest.find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == 'e')).unwrap_or(rest.len());
-                rest[..end].parse().ok()
-            };
-            if let Some(o) = entry.as_object_mut() {
-                for (k, alias) in [("prompt_n", "prompt_tokens"), ("predicted_n", "completion_tokens"), ("predicted_per_second", "tps"), ("prompt_per_second", "pp_tps"), ("prompt_tokens", "prompt_tokens"), ("completion_tokens", "completion_tokens")] {
-                    if let Some(v) = num(k) {
-                        o.entry(alias).or_insert(json!(v));
-                    }
-                }
+        // token usage from the final SSE chunk or the JSON body
+        let u = extract_usage(&text);
+        if let Some(o) = entry.as_object_mut() {
+            if let Some(v) = u.prompt {
+                o.insert("prompt_tokens".into(), json!(v));
             }
-            if let Some(t) = entry.get("tps").and_then(|v| v.as_f64()) {
-                self.inst.info.write().last_tps = Some(t);
+            if let Some(v) = u.cached {
+                o.insert("cached_tokens".into(), json!(v));
             }
-            if let Some(n) = entry.get("completion_tokens").and_then(|v| v.as_f64()) {
-                self.inst.info.write().tokens_generated += n as u64;
+            if let Some(v) = u.completion {
+                o.insert("completion_tokens".into(), json!(v));
             }
+            if let Some(v) = u.tps {
+                o.insert("tps".into(), json!(v));
+            }
+            if let Some(v) = u.pp_tps {
+                o.insert("pp_tps".into(), json!(v));
+            }
+            o.insert("user".into(), json!(self.ctx.user));
+        }
+        if let Some(t) = u.tps {
+            self.inst.info.write().last_tps = Some(t);
+        }
+        if let Some(n) = u.completion {
+            self.inst.info.write().tokens_generated += n as u64;
+        }
+        let (preset_id, model_id) = {
+            let i = self.inst.info.read();
+            (i.id.clone(), i.model_id.clone())
+        };
+        let preset = self.app.store.get::<crate::types::Preset>("presets", &preset_id).ok().flatten().map(|p| p.name).unwrap_or_default();
+        let model = self.app.store.get::<crate::types::Model>("models", &model_id).ok().flatten().map(|m| m.file_name).unwrap_or(model_id);
+        let row = crate::store::UsageRow {
+            preset_id,
+            preset,
+            model,
+            alias: self.ctx.alias.clone(),
+            user_id: self.ctx.user_id.clone(),
+            user: self.ctx.user.clone(),
+            ip: self.ctx.ip.clone(),
+            path: self.ctx.path.split('?').next().unwrap_or("").to_string(),
+            status: self.status,
+            prompt: u.prompt.unwrap_or(0) as i64,
+            cached: u.cached.unwrap_or(0) as i64,
+            completion: u.completion.unwrap_or(0) as i64,
+            ms: self.started.elapsed().as_millis() as i64,
+            tps: u.tps,
+        };
+        let days = self.app.settings.read().usage_retention_days;
+        if let Err(e) = self.app.store.usage_insert(&row, days) {
+            tracing::warn!("usage insert: {e}");
         }
         let _ = self.app.store.log_append("request_log", &entry, 5000);
+    }
+}
+
+#[derive(Debug, Default, PartialEq)]
+pub struct Usage {
+    /// all prompt tokens, including the ones served from the KV cache
+    pub prompt: Option<u64>,
+    pub cached: Option<u64>,
+    pub completion: Option<u64>,
+    pub tps: Option<f64>,
+    pub pp_tps: Option<f64>,
+}
+
+/// Parse the JSON value that follows the last occurrence of `"key":` in `text`.
+fn last_obj(text: &str, key: &str) -> Option<Value> {
+    let pat = format!("\"{key}\"");
+    let mut end = text.len();
+    while let Some(i) = text[..end].rfind(&pat) {
+        let rest = text[i + pat.len()..].trim_start();
+        if let Some(rest) = rest.strip_prefix(':') {
+            if let Some(Ok(v)) = serde_json::Deserializer::from_str(rest).into_iter::<Value>().next() {
+                if v.is_object() {
+                    return Some(v);
+                }
+            }
+        }
+        end = i;
+    }
+    None
+}
+
+/// Token usage from a llama-server response tail (OpenAI `usage` and/or llama.cpp `timings`).
+/// llama.cpp: usage.prompt_tokens = all prompt tokens; timings.prompt_n = newly processed, cache_n = reused.
+pub fn extract_usage(text: &str) -> Usage {
+    let usage = last_obj(text, "usage");
+    let timings = last_obj(text, "timings");
+    let u = |k: &str| usage.as_ref().and_then(|v| v.get(k)).and_then(|v| v.as_u64());
+    let t = |k: &str| timings.as_ref().and_then(|v| v.get(k)).and_then(|v| v.as_f64());
+    let cached = usage
+        .as_ref()
+        .and_then(|v| v.pointer("/prompt_tokens_details/cached_tokens"))
+        .and_then(|v| v.as_u64())
+        .or_else(|| t("cache_n").map(|x| x as u64));
+    let prompt = u("prompt_tokens").or_else(|| t("prompt_n").map(|p| p as u64 + cached.unwrap_or(0)));
+    Usage {
+        prompt,
+        cached: cached.or(prompt.map(|_| 0)),
+        completion: u("completion_tokens").or_else(|| t("predicted_n").map(|x| x as u64)),
+        tps: t("predicted_per_second"),
+        pp_tps: t("prompt_per_second"),
     }
 }
 
@@ -263,4 +345,31 @@ pub async fn forward(app: &AppRef, inst: Arc<Instance>, method: Method, path: &s
     *r.status_mut() = status;
     *r.headers_mut() = out_headers;
     r
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn usage_from_stream_timings() {
+        let t = "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\ndata: {\"choices\":[],\"timings\":{\"cache_n\":90,\"prompt_n\":10,\"predicted_n\":7,\"predicted_per_second\":42.5}}\n\ndata: [DONE]\n\n";
+        let u = extract_usage(t);
+        assert_eq!(u.prompt, Some(100));
+        assert_eq!(u.cached, Some(90));
+        assert_eq!(u.completion, Some(7));
+        assert_eq!(u.tps, Some(42.5));
+    }
+    #[test]
+    fn usage_prefers_openai_usage() {
+        let t = r#"{"choices":[{"message":{"content":"usage: hi"}}],"usage":{"prompt_tokens":120,"completion_tokens":3,"prompt_tokens_details":{"cached_tokens":100}},"timings":{"prompt_n":20,"cache_n":100,"predicted_n":3}}"#;
+        let u = extract_usage(t);
+        assert_eq!((u.prompt, u.cached, u.completion), (Some(120), Some(100), Some(3)));
+    }
+    #[test]
+    fn usage_truncated_body_and_missing() {
+        let t = r#"ent":"..."}}],"usage":{"prompt_tokens":5,"completion_tokens":2}}"#;
+        let u = extract_usage(t);
+        assert_eq!((u.prompt, u.cached, u.completion), (Some(5), Some(0), Some(2)));
+        assert_eq!(extract_usage("garbage"), Usage::default());
+    }
 }

@@ -73,7 +73,7 @@ class H(BaseHTTPRequestHandler):
                     self.wfile.write(f"data: {json.dumps({'choices':[{'delta':{'reasoning_content':w}}]})}\n\n".encode()); self.wfile.flush(); time.sleep(0.05)
                 for w in ["Hello", " from", " " + alias]:
                     self.wfile.write(f"data: {json.dumps({'choices':[{'delta':{'content':w}}]})}\n\n".encode()); self.wfile.flush(); time.sleep(0.05)
-                self.wfile.write(f"data: {json.dumps({'choices':[], 'timings': {'prompt_n': 5, 'predicted_n': 3, 'predicted_per_second': 42.5}})}\n\n".encode())
+                self.wfile.write(f"data: {json.dumps({'choices':[], 'timings': {'cache_n': 20, 'prompt_n': 5, 'predicted_n': 3, 'predicted_per_second': 42.5}})}\n\n".encode())
                 self.wfile.write(b"data: [DONE]\n\n"); self.wfile.flush(); return
             return self._json(200, {"model": alias, "choices": [{"message": {"role": "assistant", "content": "hi from " + alias}}], "usage": {"prompt_tokens": 5, "completion_tokens": 3}, "timings": {"predicted_per_second": 40.0}})
         self._json(404, {"error": "nf"})

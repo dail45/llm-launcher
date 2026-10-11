@@ -227,6 +227,7 @@ pub struct GhSource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Settings {
     pub ui_bind: String,
     pub ui_port: u16,
@@ -264,6 +265,8 @@ pub struct Settings {
     pub custom_cache_bits: BTreeMap<String, f64>,
     pub check_updates: bool,
     pub start_minimized: bool,
+    /// how long per-request token usage is kept for analytics (0 = forever)
+    pub usage_retention_days: u32,
 }
 
 impl Default for Settings {
@@ -305,6 +308,7 @@ impl Default for Settings {
             custom_cache_bits: BTreeMap::from([("turbo3".to_string(), 3.5)]),
             check_updates: true,
             start_minimized: false,
+            usage_retention_days: 365,
         }
     }
 }

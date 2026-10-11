@@ -15,6 +15,7 @@
   import Aliases from './pages/Aliases.svelte'
   import Instances from './pages/Instances.svelte'
   import Bench from './pages/Bench.svelte'
+  import Analytics from './pages/Analytics.svelte'
   import Chat from './pages/Chat.svelte'
   import Settings from './pages/Settings.svelte'
 
@@ -26,6 +27,7 @@
     ['/backends', '⚙', 'Сборки llama.cpp'],
     ['/aliases', '⇄', 'Алиасы и роутер'],
     ['/instances', '☰', 'Инстансы и логи'],
+    ['/analytics', '∑', 'Аналитика'],
     ['/bench', '⏱', 'Бенчмарки'],
     ['/chat', '✎', 'Чат'],
     ['/settings', '⚒', 'Настройки'],
@@ -100,6 +102,7 @@
         {:else if seg[0] === 'backends'}<Backends />
         {:else if seg[0] === 'aliases'}<Aliases />
         {:else if seg[0] === 'instances'}<Instances />
+        {:else if seg[0] === 'analytics'}<Analytics />
         {:else if seg[0] === 'bench'}<Bench />
         {:else if seg[0] === 'chat'}<Chat />
         {:else if seg[0] === 'settings'}<Settings />

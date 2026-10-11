@@ -36,7 +36,16 @@ impl Store {
             "CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS request_log (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, data TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS security_log (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, data TEXT NOT NULL);
-             CREATE INDEX IF NOT EXISTS request_log_ts ON request_log(ts);",
+             CREATE INDEX IF NOT EXISTS request_log_ts ON request_log(ts);
+             CREATE TABLE IF NOT EXISTS usage (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL,
+                preset_id TEXT NOT NULL DEFAULT '', preset TEXT NOT NULL DEFAULT '',
+                model TEXT NOT NULL DEFAULT '', alias TEXT NOT NULL DEFAULT '',
+                user_id TEXT NOT NULL DEFAULT '', user TEXT NOT NULL DEFAULT '',
+                ip TEXT NOT NULL DEFAULT '', path TEXT NOT NULL DEFAULT '', status INTEGER NOT NULL DEFAULT 0,
+                prompt INTEGER NOT NULL DEFAULT 0, cached INTEGER NOT NULL DEFAULT 0, completion INTEGER NOT NULL DEFAULT 0,
+                ms INTEGER NOT NULL DEFAULT 0, tps REAL);
+             CREATE INDEX IF NOT EXISTS usage_ts ON usage(ts);",
         )?;
         Ok(Self { conn: Arc::new(Mutex::new(conn)) })
     }
@@ -125,6 +134,104 @@ impl Store {
         Ok(out)
     }
 
+    // ---------------- token usage analytics
+    pub fn usage_insert(&self, u: &UsageRow, retention_days: u32) -> Result<()> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "INSERT INTO usage(ts,preset_id,preset,model,alias,user_id,user,ip,path,status,prompt,cached,completion,ms,tps)
+             VALUES(strftime('%s','now'),?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+            params![u.preset_id, u.preset, u.model, u.alias, u.user_id, u.user, u.ip, u.path, u.status, u.prompt, u.cached, u.completion, u.ms, u.tps],
+        )?;
+        if retention_days > 0 && conn.last_insert_rowid() % 200 == 0 {
+            conn.execute("DELETE FROM usage WHERE ts < strftime('%s','now') - ?1", params![retention_days as i64 * 86400])?;
+        }
+        Ok(())
+    }
+
+    pub fn usage_clear(&self) -> Result<usize> {
+        Ok(self.conn.lock().execute("DELETE FROM usage", [])?)
+    }
+
+    /// Aggregate usage in [from, to): totals, per-group rows and a time series per group.
+    /// `group`: model | preset | alias | user. `bucket`: seconds (3600/86400…), `tz`: offset seconds east of UTC.
+    pub fn usage_query(&self, q: &UsageQuery) -> Result<serde_json::Value> {
+        use serde_json::json;
+        let (key, label) = match q.group.as_str() {
+            "preset" => ("preset_id", "MAX(preset)"),
+            "alias" => ("alias", "alias"),
+            "user" => ("user_id", "MAX(user)"),
+            _ => ("model", "model"),
+        };
+        let conn = self.conn.lock();
+        let mut where_ = String::from("ts >= ?1 AND ts < ?2");
+        let filt = q.filter.clone().unwrap_or_default();
+        if !filt.is_empty() {
+            where_ += &format!(" AND {key} = ?3");
+        }
+        let args: Vec<rusqlite::types::Value> = {
+            let mut a: Vec<rusqlite::types::Value> = vec![q.from.into(), q.to.into()];
+            if !filt.is_empty() {
+                a.push(filt.clone().into());
+            }
+            a
+        };
+        let agg = "COUNT(*), COALESCE(SUM(prompt),0), COALESCE(SUM(cached),0), COALESCE(SUM(completion),0), COALESCE(SUM(status >= 400),0), COALESCE(SUM(ms),0), AVG(tps)";
+        let row_json = |r: &rusqlite::Row, o: usize| -> rusqlite::Result<serde_json::Value> {
+            Ok(json!({
+                "requests": r.get::<_, i64>(o)?, "prompt": r.get::<_, i64>(o + 1)?, "cached": r.get::<_, i64>(o + 2)?,
+                "completion": r.get::<_, i64>(o + 3)?, "errors": r.get::<_, i64>(o + 4)?, "ms": r.get::<_, i64>(o + 5)?,
+                "avg_tps": r.get::<_, Option<f64>>(o + 6)?,
+            }))
+        };
+        let totals = conn.query_row(&format!("SELECT {agg} FROM usage WHERE {where_}"), rusqlite::params_from_iter(args.iter()), |r| row_json(r, 0))?;
+        let mut groups = vec![];
+        {
+            let mut st = conn.prepare(&format!("SELECT {key}, {label}, {agg} FROM usage WHERE {where_} GROUP BY {key} ORDER BY SUM(prompt + completion) DESC, COUNT(*) DESC"))?;
+            let rows = st.query_map(rusqlite::params_from_iter(args.iter()), |r| {
+                let mut v = row_json(r, 2)?;
+                v["key"] = json!(r.get::<_, String>(0)?);
+                v["label"] = json!(r.get::<_, String>(1)?);
+                Ok(v)
+            })?;
+            for r in rows {
+                groups.push(r?);
+            }
+        }
+        let bucket = q.bucket.max(60);
+        let mut series = vec![];
+        {
+            let sql = format!(
+                "SELECT ((ts + ?{n}) / {bucket}) * {bucket} - ?{n} AS b, {key}, COUNT(*), SUM(prompt), SUM(cached), SUM(completion)
+                 FROM usage WHERE {where_} GROUP BY b, {key} ORDER BY b",
+                n = args.len() + 1
+            );
+            let mut a2 = args.clone();
+            a2.push(q.tz.into());
+            let mut st = conn.prepare(&sql)?;
+            let rows = st.query_map(rusqlite::params_from_iter(a2.iter()), |r| {
+                Ok(json!({"t": r.get::<_, i64>(0)?, "key": r.get::<_, String>(1)?, "requests": r.get::<_, i64>(2)?,
+                    "prompt": r.get::<_, i64>(3)?, "cached": r.get::<_, i64>(4)?, "completion": r.get::<_, i64>(5)?}))
+            })?;
+            for r in rows {
+                series.push(r?);
+            }
+        }
+        Ok(json!({"from": q.from, "to": q.to, "group": q.group, "bucket": bucket, "totals": totals, "groups": groups, "series": series}))
+    }
+
+    /// Raw rows for CSV export.
+    pub fn usage_rows(&self, from: i64, to: i64) -> Result<Vec<serde_json::Value>> {
+        let conn = self.conn.lock();
+        let mut st = conn.prepare("SELECT ts,preset,model,alias,user,ip,path,status,prompt,cached,completion,ms,tps FROM usage WHERE ts >= ?1 AND ts < ?2 ORDER BY id")?;
+        let rows = st.query_map(params![from, to], |r| {
+            Ok(serde_json::json!({"ts": r.get::<_, i64>(0)?, "preset": r.get::<_, String>(1)?, "model": r.get::<_, String>(2)?,
+                "alias": r.get::<_, String>(3)?, "user": r.get::<_, String>(4)?, "ip": r.get::<_, String>(5)?, "path": r.get::<_, String>(6)?,
+                "status": r.get::<_, i64>(7)?, "prompt": r.get::<_, i64>(8)?, "cached": r.get::<_, i64>(9)?, "completion": r.get::<_, i64>(10)?,
+                "ms": r.get::<_, i64>(11)?, "tps": r.get::<_, Option<f64>>(12)?}))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     /// Consistent snapshot of the DB into a file (for backups).
     pub fn backup_to(&self, path: &Path) -> Result<()> {
         let conn = self.conn.lock();
@@ -132,6 +239,40 @@ impl Store {
         conn.execute("VACUUM INTO ?1", params![path.to_string_lossy()])?;
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct UsageRow {
+    pub preset_id: String,
+    pub preset: String,
+    pub model: String,
+    pub alias: String,
+    pub user_id: String,
+    pub user: String,
+    pub ip: String,
+    pub path: String,
+    pub status: u16,
+    pub prompt: i64,
+    pub cached: i64,
+    pub completion: i64,
+    pub ms: i64,
+    pub tps: Option<f64>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct UsageQuery {
+    pub from: i64,
+    pub to: i64,
+    #[serde(default)]
+    pub group: String,
+    #[serde(default = "default_bucket")]
+    pub bucket: i64,
+    #[serde(default)]
+    pub tz: i64,
+    pub filter: Option<String>,
+}
+fn default_bucket() -> i64 {
+    3600
 }
 
 #[cfg(test)]
@@ -151,5 +292,28 @@ mod tests {
         s.log_append("request_log", &serde_json::json!({"a":2}), 2).unwrap();
         s.log_append("request_log", &serde_json::json!({"a":3}), 2).unwrap();
         assert_eq!(s.log_list("request_log", 10).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn usage_aggregation() {
+        let s = Store::memory().unwrap();
+        let row = |model: &str, user: &str, p: i64, c: i64, o: i64| UsageRow { model: model.into(), user_id: user.into(), user: user.into(), preset_id: "p1".into(), preset: "P".into(), prompt: p, cached: c, completion: o, status: 200, ..Default::default() };
+        s.usage_insert(&row("a.gguf", "k1", 100, 40, 10), 0).unwrap();
+        s.usage_insert(&row("a.gguf", "k2", 50, 0, 5), 0).unwrap();
+        s.usage_insert(&row("b.gguf", "k1", 10, 0, 1), 0).unwrap();
+        let q = |g: &str| UsageQuery { from: 0, to: i64::MAX / 2, group: g.into(), bucket: 3600, tz: 0, filter: None };
+        let r = s.usage_query(&q("model")).unwrap();
+        assert_eq!(r["totals"]["prompt"], 160);
+        assert_eq!(r["totals"]["cached"], 40);
+        assert_eq!(r["groups"][0]["key"], "a.gguf");
+        assert_eq!(r["groups"][0]["completion"], 15);
+        let r = s.usage_query(&q("user")).unwrap();
+        assert_eq!(r["groups"].as_array().unwrap().len(), 2);
+        assert_eq!(r["groups"][0]["key"], "k1");
+        assert_eq!(r["groups"][0]["requests"], 2);
+        let mut f = q("user");
+        f.filter = Some("k2".into());
+        assert_eq!(s.usage_query(&f).unwrap()["totals"]["requests"], 1);
+        assert_eq!(s.usage_rows(0, i64::MAX / 2).unwrap().len(), 3);
     }
 }

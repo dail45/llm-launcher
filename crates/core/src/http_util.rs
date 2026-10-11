@@ -75,12 +75,12 @@ pub fn req_meta(app: &AppRef, parts: &Parts) -> ReqMeta {
     ReqMeta { ip, local: is_loopback(peer) && !forwarded }
 }
 
-/// Resolve the caller. `router` = router endpoint semantics (key optional if disabled).
+/// Resolve the caller. `router` = router endpoint semantics (open while no API keys exist).
 pub fn resolve_principal(app: &AppRef, parts: &Parts, router: bool) -> R<(Principal, ReqMeta)> {
     let meta = req_meta(app, parts);
-    let (subnets, local_no_auth, require_key) = {
+    let (subnets, local_no_auth) = {
         let s = app.settings.read();
-        (s.allowed_subnets.clone(), s.local_no_auth, s.router_require_key)
+        (s.allowed_subnets.clone(), s.local_no_auth)
     };
     if !meta.local && !subnets.is_empty() && !subnets.iter().any(|c| ip_in(meta.ip, c)) {
         return Err(ApiError::forbidden("доступ с этого адреса запрещён"));
@@ -96,7 +96,8 @@ pub fn resolve_principal(app: &AppRef, parts: &Parts, router: bool) -> R<(Princi
     if meta.local && local_no_auth {
         return Ok((Principal::Local, meta));
     }
-    if router && !require_key {
+    // router: an API key is required only if at least one key exists; no keys = open router
+    if router && !app.auth.has_api_keys() {
         return Ok((Principal::Local, meta));
     }
     Err(ApiError::unauthorized("требуется авторизация"))

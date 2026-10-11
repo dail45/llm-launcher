@@ -54,6 +54,14 @@ impl Principal {
             _ => true,
         }
     }
+    /// (api key id, display name) for usage analytics; id is "" without a key
+    pub fn user(&self) -> (String, String) {
+        match self {
+            Principal::Local => (String::new(), "local".into()),
+            Principal::Admin { .. } => (String::new(), "admin".into()),
+            Principal::Key(k) => (k.id.clone(), k.name.clone()),
+        }
+    }
     pub fn label(&self) -> String {
         match self {
             Principal::Local => "local".into(),
@@ -237,6 +245,12 @@ impl Auth {
             let _ = self.store.put("api_keys", &k.id, &k);
         }
         Some(k)
+    }
+
+    /// Whether at least one valid (non-expired) API key exists. If none, the router is open.
+    pub fn has_api_keys(&self) -> bool {
+        let n = now();
+        self.store.list::<ApiKey>("api_keys").map(|v| v.iter().any(|k| k.expires_at.map_or(true, |e| e > n))).unwrap_or(false)
     }
 
     /// Resolve bearer token (API key or JWT).

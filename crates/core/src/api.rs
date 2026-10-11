@@ -115,6 +115,8 @@ pub fn router(app: AppRef) -> Router {
         .route("/api/bench/{id}", delete(delete_bench))
         // router info & chat proxy
         .route("/api/router/requests", get(router_requests))
+        .route("/api/analytics", get(analytics).delete(analytics_clear))
+        .route("/api/analytics/export", get(analytics_export))
         .route("/api/router/models", get(router_models))
         .route("/api/v1/{*rest}", any(chat_proxy))
         .fallback(static_ui)
@@ -1083,6 +1085,35 @@ struct LimitQ {
 }
 async fn router_requests(State(app): State<AppRef>, _a: Admin, Query(q): Query<LimitQ>) -> R<J> {
     j(app.store.log_list("request_log", q.limit.unwrap_or(200).clamp(1, 5000))?)
+}
+async fn analytics(State(app): State<AppRef>, _a: Admin, Query(q): Query<crate::store::UsageQuery>) -> R<J> {
+    j(app.store.usage_query(&q)?)
+}
+async fn analytics_clear(State(app): State<AppRef>, _a: Admin) -> R<J> {
+    j(json!({"deleted": app.store.usage_clear()?}))
+}
+#[derive(Deserialize)]
+struct RangeQ {
+    from: i64,
+    to: i64,
+}
+async fn analytics_export(State(app): State<AppRef>, _a: Admin, Query(q): Query<RangeQ>) -> R<Response> {
+    let rows = app.store.usage_rows(q.from, q.to)?;
+    let cols = ["ts", "preset", "model", "alias", "user", "ip", "path", "status", "prompt", "cached", "completion", "ms", "tps"];
+    let mut out = cols.join(",") + "\n";
+    for r in rows {
+        let line: Vec<String> = cols
+            .iter()
+            .map(|c| match &r[*c] {
+                Value::String(s) => format!("\"{}\"", s.replace('"', "\"\"")),
+                Value::Null => String::new(),
+                v => v.to_string(),
+            })
+            .collect();
+        out += &line.join(",");
+        out.push('\n');
+    }
+    Ok(([(header::CONTENT_TYPE, "text/csv; charset=utf-8"), (header::CONTENT_DISPOSITION, "attachment; filename=\"usage.csv\"")], out).into_response())
 }
 async fn router_models(State(app): State<AppRef>, Admin(p, _): Admin) -> R<J> {
     Ok(Json(crate::router::models_payload(&app, &p)))

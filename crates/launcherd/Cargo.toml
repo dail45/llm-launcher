@@ -1,0 +1,10 @@
+[package]
+name = "launcherd"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+lll-core = { path = "../core" }
+tokio.workspace = true
+anyhow.workspace = true
+tracing.workspace = true

@@ -24,6 +24,16 @@
 
 Тег `v*` дополнительно публикует GitHub Release.
 
+### В Docker (без Rust и Visual Studio на машине)
+Нужен только Docker Desktop (WSL2). Кросс-сборка Linux → Windows (MSVC-таргет через `cargo-xwin`, установщик NSIS):
+```powershell
+.\build-windows.ps1
+# или: docker build --target export --output dist .
+```
+В `dist\` появятся `launcherd.exe`, `LlamaLauncher-portable.exe` и `Llama Launcher_*_x64-setup.exe`. MSI в Docker не собирается (WiX работает только на Windows) — он есть в сборке GitHub Actions.
+Первая сборка долгая (образ с тулчейном ~3–4 ГБ, скачивание Windows SDK), повторные — инкрементальные за счёт кэша BuildKit. Сборка подразумевает согласие с лицензией Microsoft на CRT/SDK, которые скачивает `xwin`.
+Очистить всё: `docker builder prune` и `docker image prune`.
+
 ### Локально на Windows
 Нужны: [Rust](https://rustup.rs) (MSVC), Node.js 20+, Visual Studio Build Tools (C++).
 ```powershell

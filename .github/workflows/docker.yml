@@ -3,7 +3,7 @@ name: docker-build
 # Verifies that the Dockerfile cross-build (Linux -> Windows) works.
 on:
   push:
-    branches: [main]
+    branches: [master]
     paths: ['Dockerfile', '.dockerignore', '.github/workflows/docker.yml']
   workflow_dispatch:
 

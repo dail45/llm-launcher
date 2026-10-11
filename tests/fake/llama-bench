@@ -1,0 +1,83 @@
+#!/usr/bin/env python3
+"""Fake llama-server for end-to-end tests: --help, --version, --list-devices, /health, /v1/chat/completions."""
+import json, sys, time, threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+HELP = """----- common params -----
+
+-h,    --help, --usage                  print usage and exit
+-t,    --threads N                      number of threads (default: -1)
+                                        (env: LLAMA_ARG_THREADS)
+-c,    --ctx-size N                     size of the prompt context (default: 4096)
+-ngl,  --gpu-layers, --n-gpu-layers N   max. number of layers to store in VRAM (default: -1)
+-fa,   --flash-attn [on|off|auto]       set Flash Attention use (default: 'auto')
+--mmap, --no-mmap                       whether to memory-map model (default: enabled)
+-ctk,  --cache-type-k TYPE              KV cache data type for K
+                                        allowed values: f16, q8_0, q4_0, turbo3
+                                        (default: f16)
+-ctv,  --cache-type-v TYPE              KV cache data type for V
+                                        allowed values: f16, q8_0, q4_0, turbo3
+                                        (default: f16)
+-m,    --model FNAME                    model path
+--mmproj FILE                           multimodal projector
+--host HOST                             ip address to listen (default: 127.0.0.1)
+--port PORT                             port to listen (default: 8080)
+-a,    --alias STRING                   model alias
+--jinja                                 use jinja template
+--fail-load                             (test) fail while loading
+
+----- sampling params -----
+
+--temp N                                temperature (default: 0.8)
+"""
+
+args = sys.argv[1:]
+if "--help" in args:
+    print(HELP); sys.exit(0)
+if "--version" in args:
+    print("version: 6500 (abc1234)\nbuilt with fake", file=sys.stderr); sys.exit(0)
+if "--list-devices" in args:
+    print("Available devices:\n  CUDA0: Fake GPU (24000 MiB, 23000 MiB free)"); sys.exit(0)
+
+def arg(name, default=None):
+    if name in args:
+        i = args.index(name)
+        return args[i + 1] if i + 1 < len(args) else default
+    return default
+
+port = int(arg("--port", "8080"))
+alias = arg("--alias", "fake")
+ready = threading.Event()
+print(f"load_tensors: offloaded 33/33 layers to GPU", flush=True)
+if "--fail-load" in args:
+    print("ggml_backend_cuda_buffer_type_alloc_buffer: allocating 9999 MiB on device 0: cudaMalloc failed: out of memory", file=sys.stderr, flush=True)
+    sys.exit(1)
+
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def _json(self, code, obj):
+        b = json.dumps(obj).encode()
+        self.send_response(code); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
+    def do_GET(self):
+        if self.path.startswith("/health"):
+            return self._json(200 if ready.is_set() else 503, {"status": "ok" if ready.is_set() else "loading"})
+        if self.path.startswith("/props"):
+            return self._json(200, {"alias": alias, "args": args})
+        self._json(404, {"error": "nf"})
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length", 0)); body = json.loads(self.rfile.read(n) or b"{}")
+        if self.path.startswith("/v1/chat/completions"):
+            if body.get("stream"):
+                self.send_response(200); self.send_header("Content-Type", "text/event-stream"); self.end_headers()
+                for w in ["Hello", " from", " " + alias]:
+                    self.wfile.write(f"data: {json.dumps({'choices':[{'delta':{'content':w}}]})}\n\n".encode()); self.wfile.flush(); time.sleep(0.05)
+                self.wfile.write(f"data: {json.dumps({'choices':[], 'timings': {'prompt_n': 5, 'predicted_n': 3, 'predicted_per_second': 42.5}})}\n\n".encode())
+                self.wfile.write(b"data: [DONE]\n\n"); self.wfile.flush(); return
+            return self._json(200, {"model": alias, "choices": [{"message": {"role": "assistant", "content": "hi from " + alias}}], "usage": {"prompt_tokens": 5, "completion_tokens": 3}, "timings": {"predicted_per_second": 40.0}})
+        self._json(404, {"error": "nf"})
+
+srv = ThreadingHTTPServer(("127.0.0.1", port), H)
+def load():
+    time.sleep(0.8); ready.set(); print(f"main: server is listening on http://127.0.0.1:{port}", flush=True)
+threading.Thread(target=load, daemon=True).start()
+srv.serve_forever()

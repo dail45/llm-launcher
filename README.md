@@ -17,12 +17,18 @@
 ## Сборка
 
 ### Через GitHub Actions (проще всего)
-Запушьте репозиторий на GitHub — `.github/workflows/build.yml` соберёт на `windows-latest`:
+Workflow'ы запускаются **только вручную** — коммиты сборку не запускают.
+**Actions → release → Run workflow**: укажите версию `X.Y.Z` (пусто — текущая из `Cargo.toml`) и отметьте, публиковать ли релиз. `.github/workflows/release.yml` соберёт на `windows-latest`:
 - `Llama Launcher_*_x64-setup.exe` (NSIS) и `.msi` — установщики;
 - `LlamaLauncher-portable.exe` — без установки (нужен WebView2, в Windows 10/11 он обычно есть);
 - `launcherd.exe` — версия без окна.
 
-Тег `v*` дополнительно публикует GitHub Release.
+- `SHA256SUMS.txt` — контрольные суммы.
+
+При `publish` версия прописывается в `Cargo.toml`/`ui/package.json` (коммит «Release vX.Y.Z» в ветку), ставится тег `vX.Y.Z` и создаётся GitHub Release с файлами и автоматическими release notes. Без `publish` — только артефакты сборки (вкладка Summary запуска). Workflow `docker-build` (тоже вручную) проверяет кросс-сборку через Dockerfile.
+
+### Версия
+Единственный источник — `version` в `[workspace.package]` корневого `Cargo.toml` (Tauri и `launcherd` берут её оттуда). Версия видна в боковой панели и на экране входа, полная (с коммитом и датой сборки) — в «Настройки → О программе», в меню трея, в `launcherd --version` и в `GET /api/version`.
 
 ### В Docker (без Rust и Visual Studio на машине)
 Нужен только Docker Desktop (WSL2). Кросс-сборка Linux → Windows (MSVC-таргет через `cargo-xwin`, установщик NSIS):

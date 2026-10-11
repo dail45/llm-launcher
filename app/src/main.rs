@@ -71,6 +71,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .item(&MenuItem::with_id(app, "stop_all", format!("Остановить все ({alive})"), alive > 0, None::<&str>)?)
         .item(&MenuItem::with_id(app, "open_browser", "Открыть в браузере", true, None::<&str>)?)
         .item(&PredefinedMenuItem::separator(app)?)
+        .item(&MenuItem::with_id(app, "version", format!("Версия {}", lll_core::version_string()), false, None::<&str>)?)
         .item(&MenuItem::with_id(app, "quit", "Выход", true, None::<&str>)?)
         .build()
 }
@@ -81,7 +82,8 @@ fn refresh_tray(app: &AppHandle) {
             let _ = t.set_menu(Some(m));
         }
         let n = core().pm.alive().len();
-        let _ = t.set_tooltip(Some(if n == 0 { "Llama Launcher".to_string() } else { format!("Llama Launcher — запущено: {n}") }));
+        let v = lll_core::VERSION;
+        let _ = t.set_tooltip(Some(if n == 0 { format!("Llama Launcher v{v}") } else { format!("Llama Launcher v{v} — запущено: {n}") }));
     }
 }
 
@@ -153,7 +155,7 @@ fn main() {
 
             let icon = app.default_window_icon().cloned();
             let mut tb = TrayIconBuilder::with_id(TRAY_ID)
-                .tooltip("Llama Launcher")
+                .tooltip(format!("Llama Launcher v{}", lll_core::VERSION))
                 .menu(&build_menu(&handle)?)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, ev| on_menu(app, ev.id().as_ref()))

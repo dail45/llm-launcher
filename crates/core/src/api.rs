@@ -36,6 +36,7 @@ struct UiAssets;
 pub fn router(app: AppRef) -> Router {
     Router::new()
         // auth
+        .route("/api/version", get(version))
         .route("/api/auth/status", get(auth_status))
         .route("/api/auth/login", post(login))
         .route("/api/auth/refresh", post(refresh))
@@ -143,6 +144,10 @@ async fn static_ui(req: Request) -> Response {
 }
 
 // ---------------- auth
+async fn version() -> R<J> {
+    j(json!({ "version": crate::VERSION, "commit": crate::GIT_SHA, "build_date": crate::BUILD_DATE }))
+}
+
 async fn auth_status(State(app): State<AppRef>, req: Request) -> R<J> {
     let (parts, _) = req.into_parts();
     let meta = req_meta(&app, &parts);
@@ -154,6 +159,7 @@ async fn auth_status(State(app): State<AppRef>, req: Request) -> R<J> {
         "local": meta.local,
         "has_password": app.auth.has_password(),
         "remote_enabled": s.ui_bind != "127.0.0.1" && s.ui_bind != "localhost",
+        "version": crate::VERSION,
     }))
 }
 
@@ -259,7 +265,9 @@ async fn status(State(app): State<AppRef>, _a: Admin) -> R<J> {
     let s = app.settings();
     let lan = lan_ip().map(|i| i.to_string());
     j(json!({
-        "version": env!("CARGO_PKG_VERSION"),
+        "version": crate::VERSION,
+        "commit": crate::GIT_SHA,
+        "build_date": crate::BUILD_DATE,
         "data_dir": crate::paths::data_dir(),
         "ui_port": s.ui_port, "router_port": s.router_port, "ui_bind": s.ui_bind, "router_bind": s.router_bind,
         "lan_ip": lan,

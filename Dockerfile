@@ -42,6 +42,9 @@ WORKDIR /src
 COPY . .
 COPY --from=ui /src/ui/dist ./ui/dist
 ARG TARGET=x86_64-pc-windows-msvc
+# .git is not copied into the context; pass the commit explicitly (shown in the app)
+ARG LLL_GIT_SHA=
+ENV LLL_GIT_SHA=${LLL_GIT_SHA}
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/xwin-cache \

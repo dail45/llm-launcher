@@ -1,0 +1,140 @@
+name: release
+
+# Manual only: Actions → release → Run workflow.
+# Builds Windows binaries (NSIS + MSI installers, portable exe, launcherd.exe)
+# and optionally publishes a GitHub Release tagged v<version>.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Версия X.Y.Z (пусто = текущая из Cargo.toml)'
+        required: false
+        default: ''
+      publish:
+        description: 'Опубликовать GitHub Release (иначе только артефакты сборки)'
+        type: boolean
+        default: true
+      prerelease:
+        description: 'Пометить как pre-release'
+        type: boolean
+        default: false
+      draft:
+        description: 'Создать как черновик'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: ver
+        shell: pwsh
+        run: |
+          $cur = (Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          $v = '${{ inputs.version }}'.Trim().TrimStart('v')
+          if (-not $v) { $v = $cur }
+          # MSI (WiX) accepts only numeric X.Y.Z
+          if ($v -notmatch '^\d+\.\d+\.\d+$') { throw "Версия '$v' должна быть в формате X.Y.Z" }
+          if ('${{ inputs.publish }}' -eq 'true' -and (git tag -l "v$v")) { throw "Тег v$v уже существует — укажите новую версию" }
+          "version=$v" >> $env:GITHUB_OUTPUT
+          "bump=$([int]($v -ne $cur))" >> $env:GITHUB_OUTPUT
+          "LLL_GIT_SHA=$(git rev-parse --short=7 HEAD)" >> $env:GITHUB_ENV
+          Write-Host "current=$cur  release=$v"
+
+      - name: Set version
+        if: steps.ver.outputs.bump == '1'
+        shell: pwsh
+        run: |
+          $v = '${{ steps.ver.outputs.version }}'
+          $t = Get-Content Cargo.toml -Raw
+          $re = [regex]'(?m)^version = "[^"]+"'
+          $t = $re.Replace($t, "version = `"$v`"", 1)
+          [IO.File]::WriteAllText("$PWD/Cargo.toml", $t)
+          Push-Location ui; npm version $v --no-git-tag-version --allow-same-version; Pop-Location
+          if ('${{ inputs.publish }}' -eq 'true') {
+            # Cargo.lock: refresh workspace package versions without touching dependencies
+            cargo metadata --format-version 1 > $null
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add Cargo.toml Cargo.lock ui/package.json ui/package-lock.json
+            git commit -m "Release v$v"
+            git push origin HEAD:${{ github.ref_name }}
+            "LLL_GIT_SHA=$(git rev-parse --short=7 HEAD)" >> $env:GITHUB_ENV
+          }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Build UI
+        working-directory: ui
+        run: |
+          npm ci
+          npm run build
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Unit tests
+        run: cargo test -p lll-core
+
+      - name: Build headless launcherd
+        run: cargo build --release -p launcherd
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked
+
+      - name: Build desktop app (NSIS + MSI)
+        working-directory: app
+        run: cargo tauri build
+
+      - name: Collect artifacts
+        shell: pwsh
+        run: |
+          $v = '${{ steps.ver.outputs.version }}'
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/release/launcherd.exe "dist/launcherd-$v.exe"
+          Copy-Item target/release/llama-launcher.exe "dist/LlamaLauncher-$v-portable.exe"
+          Get-ChildItem target/release/bundle -Recurse -Include *.exe,*.msi | Copy-Item -Destination dist/
+          Get-ChildItem dist | ForEach-Object { "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name } | Set-Content dist/SHA256SUMS.txt
+          & "target/release/launcherd.exe" --version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: llama-launcher-${{ steps.ver.outputs.version }}-windows
+          path: dist/*
+
+      - name: Tag
+        if: inputs.publish
+        shell: pwsh
+        run: |
+          $v = '${{ steps.ver.outputs.version }}'
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v$v" -m "Llama Launcher v$v"
+          git push origin "v$v"
+
+      - name: GitHub Release
+        if: inputs.publish
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: Llama Launcher v${{ steps.ver.outputs.version }}
+          prerelease: ${{ inputs.prerelease }}
+          draft: ${{ inputs.draft }}
+          generate_release_notes: true
+          files: dist/*

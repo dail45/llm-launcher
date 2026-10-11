@@ -227,7 +227,10 @@
       <div class="card">
         <h3 style="margin-top:0">{t('О программе')}</h3>
         <div class="kv small">
-          <span>{t('Версия')}</span><span>{app.status.version}</span>
+          <span>{t('Версия')}</span><span><b>v{app.status.version}</b></span>
+          {#if app.status.commit}<span>{t('Коммит')}</span><a href={'https://github.com/dail45/llm-launcher/commit/' + app.status.commit} target="_blank" rel="noreferrer"><code>{app.status.commit}</code></a>{/if}
+          {#if app.status.build_date}<span>{t('Дата сборки')}</span><span>{app.status.build_date}</span>{/if}
+          <span>{t('Релизы')}</span><a href="https://github.com/dail45/llm-launcher/releases" target="_blank" rel="noreferrer">GitHub Releases ↗</a>
           <span>{t('Данные')}</span><code style="word-break:break-all">{app.status.data_dir}</code>
           <span>UI</span><span>{app.status.ui_bind}:{app.status.ui_port}</span>
           <span>{t('Роутер')}</span><span>{app.status.router_bind}:{app.status.router_port}</span>

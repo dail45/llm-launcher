@@ -81,5 +81,6 @@ check "usage csv" "$(curl -s "$API/analytics/export?from=0&to=99999999999" | hea
 check "export" "$(curl -s $API/presets/export | j 'len(d["presets"])')" "2"
 check "backup zip" "$(curl -s $API/backup | head -c 2)" "PK"
 check "ui served" "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8090/)" "200"
+check "version" "$(curl -s $API/version | j 'd["version"]')" "$(grep -m1 '^version' ../Cargo.toml | cut -d'"' -f2)"
 curl -s -XPOST $API/instances/stop-all >/dev/null
 [ $fail = 0 ] && echo "E2E: ALL PASSED" || { echo "E2E: FAILURES"; tail -20 $T/out.log; exit 1; }

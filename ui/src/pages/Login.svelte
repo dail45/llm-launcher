@@ -24,6 +24,7 @@
 <div class="wrap">
   <form class="card" onsubmit={submit}>
     <h1>🦙 Llama Launcher</h1>
+    {#if app.auth.version}<div class="muted small" style="margin:-8px 0 8px">v{app.auth.version}</div>{/if}
     {#if !app.auth.has_password}
       <div class="alert warn">{t('Пароль не задан. Задайте его на компьютере с лаунчером (Настройки → Безопасность) или командой launcherd --set-password.')}</div>
     {:else}

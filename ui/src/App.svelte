@@ -58,7 +58,7 @@
 {:else}
   <div class="shell">
     <aside>
-      <div class="logo">🦙 <b>Llama Launcher</b></div>
+      <div class="logo">🦙 <b>Llama Launcher</b>{#if app.auth.version}<span class="ver" title={t('Версия')}>v{app.auth.version}</span>{/if}</div>
       <nav>
         {#each nav as [p, ic, label]}
           <a href={'#' + p} class:on={isOn(p)}>
@@ -119,6 +119,7 @@
   .shell { display: flex; height: 100%; }
   aside { width: 228px; flex: none; background: var(--bg2); border-right: 1px solid var(--line); display: flex; flex-direction: column; }
   .logo { padding: 16px 16px 12px; font-size: 15px; }
+  .logo .ver { margin-left: 6px; font-size: 11px; color: var(--fg3); font-weight: 400; }
   nav { display: flex; flex-direction: column; padding: 4px 8px; gap: 1px; flex: 1; overflow: auto; }
   nav a { color: var(--fg2); padding: 7px 10px; border-radius: 7px; display: flex; align-items: center; gap: 10px; }
   nav a:hover { background: var(--bg3); text-decoration: none; color: var(--fg); }

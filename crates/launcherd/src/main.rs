@@ -16,7 +16,7 @@ async fn main() -> Result<()> {
             "--data-dir" => lll_core::paths::set_data_dir(args.next().expect("--data-dir needs a value").into()),
             "--set-password" => set_pw = args.next(),
             "--version" => {
-                println!("{}", env!("CARGO_PKG_VERSION"));
+                println!("{}", lll_core::version_string());
                 return Ok(());
             }
             "--minimized" => {}
@@ -40,7 +40,7 @@ async fn main() -> Result<()> {
     }
     let app = lll_core::server::boot().await?;
     let s = app.settings();
-    println!("Llama Launcher {} — UI http://{}:{}  router http://{}:{}/v1", env!("CARGO_PKG_VERSION"), s.ui_bind, s.ui_port, s.router_bind, s.router_port);
+    println!("Llama Launcher v{} — UI http://{}:{}  router http://{}:{}/v1", lll_core::version_string(), s.ui_bind, s.ui_port, s.router_bind, s.router_port);
     tokio::signal::ctrl_c().await?;
     tracing::info!("shutting down, stopping instances");
     app.shutdown().await;

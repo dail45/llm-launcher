@@ -1,5 +1,8 @@
 // English UI strings (keys are the Russian originals)
 export const EN: Record<string, string> = {
+ "Коммит": "Commit",
+ "Дата сборки": "Build date",
+ "Релизы": "Releases",
  "API-ключи": "API keys",
  "Draft-модель (speculative)": "Draft model (speculative)",
  "GGUF-файлов не найдено": "No GGUF files found",

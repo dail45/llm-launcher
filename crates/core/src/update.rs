@@ -251,13 +251,12 @@ fn ps_quote(s: &str) -> String {
 pub fn helper_script(k: Kind, pid: u32, exe: &Path, file: &Path, args: &[String]) -> String {
     let exe_q = ps_quote(&exe.to_string_lossy());
     let file_q = ps_quote(&file.to_string_lossy());
+    let log_q = ps_quote(&file.with_file_name("update-helper.log").to_string_lossy());
     let mut s = format!(
-        "$ErrorActionPreference='SilentlyContinue'\n$t=0; while ((Get-Process -Id {pid}) -and $t -lt 120) {{ Start-Sleep -Milliseconds 250; $t++ }}\nStop-Process -Id {pid} -Force\nStart-Sleep -Milliseconds 300\n"
+        "$ErrorActionPreference='SilentlyContinue'\nStart-Transcript -LiteralPath {log_q} -Force | Out-Null\n$t=0; while ((Get-Process -Id {pid}) -and $t -lt 120) {{ Start-Sleep -Milliseconds 250; $t++ }}\nStop-Process -Id {pid} -Force\nStart-Sleep -Milliseconds 300\n"
     );
     match k {
-        Kind::Portable | Kind::Headless => s.push_str(&format!(
-            "for ($i=0; $i -lt 60; $i++) {{ try {{ Move-Item -LiteralPath {exe_q} -Destination ({exe_q}+'.old') -Force -ErrorAction Stop; break }} catch {{ Start-Sleep -Milliseconds 500 }} }}\nMove-Item -LiteralPath {file_q} -Destination {exe_q} -Force\n"
-        )),
+        Kind::Portable | Kind::Headless => {} // handled by swap_and_restart
         Kind::Nsis => s.push_str(&format!("Start-Process -FilePath {file_q} -ArgumentList '/S' -Wait\n")),
         Kind::Msi => s.push_str(&format!("Start-Process -FilePath 'msiexec.exe' -ArgumentList @('/i', ('\"'+{file_q}+'\"'), '/passive', '/norestart') -Wait\n")),
         Kind::Unsupported => {}
@@ -343,9 +342,13 @@ async fn run_install(app: &Arc<App>, jid: &str, k: Kind) -> Result<()> {
     }
 
     let exe = std::env::current_exe()?;
-    let args: Vec<String> = std::env::args().skip(1).filter(|a| a != "--minimized").collect();
-    let script = helper_script(k, std::process::id(), &exe, &file, &args);
-    spawn_helper(&script)?;
+    let args = restart_args(std::env::args().skip(1));
+    match k {
+        // Windows allows renaming a running exe: swap it in place and start the new
+        // version directly (it waits for this process to exit) — no PowerShell needed.
+        Kind::Portable | Kind::Headless => swap_and_restart(&exe, &file, &args)?,
+        _ => spawn_helper(&helper_script(k, std::process::id(), &exe, &file, &args))?,
+    }
     h().done(json!({"version": tag}), format!("Установка {tag}, перезапуск…"));
     app.bus.toast("info", "Обновление", &format!("Устанавливается {tag}, лаунчер перезапустится"));
     tokio::time::sleep(std::time::Duration::from_millis(800)).await;
@@ -357,21 +360,134 @@ async fn run_install(app: &Arc<App>, jid: &str, k: Kind) -> Result<()> {
     Ok(())
 }
 
+/// Arguments for the restarted process: drop `--minimized` (show the window) and stale `--after-update <pid>`.
+pub fn restart_args(it: impl Iterator<Item = String>) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut it = it.peekable();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--minimized" => {}
+            "--after-update" => {
+                it.next();
+            }
+            _ => out.push(a),
+        }
+    }
+    out
+}
+
+/// Replace `exe` with `file` (old one is kept as `.exe.old` until the next start) and launch it.
+pub fn swap_and_restart(exe: &Path, file: &Path, args: &[String]) -> Result<()> {
+    let old = exe.with_extension("exe.old");
+    let _ = std::fs::remove_file(&old);
+    std::fs::rename(exe, &old).with_context(|| format!("не удалось переименовать {} — нет прав на запись в папку программы?", exe.display()))?;
+    let rollback = || {
+        let _ = std::fs::remove_file(exe);
+        let _ = std::fs::rename(&old, exe);
+    };
+    if std::fs::rename(file, exe).is_err() {
+        // different volume (data dir elsewhere) — copy instead
+        if let Err(e) = std::fs::copy(file, exe) {
+            rollback();
+            return Err(e).context("не удалось записать новую версию");
+        }
+        let _ = std::fs::remove_file(file);
+    }
+    let mut args = args.to_vec();
+    args.push("--after-update".into());
+    args.push(std::process::id().to_string());
+    if let Err(e) = spawn_detached(exe, &args) {
+        rollback();
+        return Err(e).context("не удалось запустить новую версию");
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+const BREAKAWAY: u32 = 0x0100_0000; // CREATE_BREAKAWAY_FROM_JOB
+
+fn spawn_detached(exe: &Path, args: &[String]) -> Result<()> {
+    let mk = |_flags: u32| {
+        let mut c = std::process::Command::new(exe);
+        c.args(args).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+        if let Some(d) = exe.parent() {
+            c.current_dir(d);
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            c.creation_flags(_flags);
+        }
+        c
+    };
+    #[cfg(windows)]
+    {
+        let base = crate::proc_util::CREATE_NO_WINDOW | crate::proc_util::CREATE_NEW_PROCESS_GROUP;
+        // break away from a job object (e.g. when started from a terminal/IDE) so we are not killed with the parent
+        if mk(base | BREAKAWAY).spawn().is_ok() {
+            return Ok(());
+        }
+        mk(base).spawn()?;
+        return Ok(());
+    }
+    #[cfg(not(windows))]
+    {
+        mk(0).spawn()?;
+        Ok(())
+    }
+}
+
+/// Called first thing in `main`: after a self-update wait until the previous process exits.
+pub fn wait_after_update() {
+    let mut it = std::env::args();
+    while let Some(a) = it.next() {
+        if a == "--after-update" {
+            if let Some(pid) = it.next().and_then(|p| p.parse::<u32>().ok()) {
+                wait_pid(pid, 30_000);
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+fn wait_pid(pid: u32, ms: u32) {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE};
+    unsafe {
+        if let Ok(h) = OpenProcess(PROCESS_SYNCHRONIZE, false, pid) {
+            let _ = WaitForSingleObject(h, ms);
+            let _ = CloseHandle(h);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn wait_pid(pid: u32, ms: u32) {
+    let t = std::time::Instant::now();
+    while Path::new(&format!("/proc/{pid}")).exists() && t.elapsed().as_millis() < ms as u128 {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
 #[cfg(windows)]
 fn spawn_helper(script: &str) -> Result<()> {
     use base64::Engine;
     use std::os::windows::process::CommandExt;
     let utf16: Vec<u8> = script.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
     let enc = base64::engine::general_purpose::STANDARD.encode(utf16);
-    const DETACHED_PROCESS: u32 = 0x0000_0008;
-    std::process::Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-EncodedCommand", &enc])
-        .creation_flags(crate::proc_util::CREATE_NO_WINDOW | DETACHED_PROCESS | crate::proc_util::CREATE_NEW_PROCESS_GROUP)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .context("не удалось запустить PowerShell")?;
+    let mk = |flags: u32| {
+        let mut c = std::process::Command::new("powershell.exe");
+        c.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", &enc])
+            .creation_flags(flags)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        c
+    };
+    let base = crate::proc_util::CREATE_NO_WINDOW | crate::proc_util::CREATE_NEW_PROCESS_GROUP;
+    if mk(base | BREAKAWAY).spawn().is_err() {
+        mk(base).spawn().context("не удалось запустить PowerShell")?;
+    }
     Ok(())
 }
 
@@ -416,11 +532,43 @@ mod tests {
 
     #[test]
     fn script() {
-        let s = helper_script(Kind::Portable, 42, Path::new(r"C:\Users\Пётр\LL\LlamaLauncher.exe"), Path::new(r"C:\data\updates\new.exe"), &["--data-dir".into(), r"D:\it's".into()]);
+        let s = helper_script(Kind::Msi, 42, Path::new(r"C:\Users\Пётр\LL\LlamaLauncher.exe"), Path::new(r"C:\data\updates\new.exe"), &["--data-dir".into(), r"D:\it's".into()]);
         assert!(s.contains("Get-Process -Id 42"));
         assert!(s.contains(r"'C:\Users\Пётр\LL\LlamaLauncher.exe'"));
         assert!(s.contains("it''s"));
         let n = helper_script(Kind::Nsis, 1, Path::new("a.exe"), Path::new("s.exe"), &[]);
         assert!(n.contains("-ArgumentList '/S' -Wait") && n.ends_with("Start-Process -FilePath 'a.exe'\n"));
+    }
+
+    #[test]
+    fn args_for_restart() {
+        let a = restart_args(["--minimized", "--data-dir", "D:\\x", "--after-update", "12"].map(String::from).into_iter());
+        assert_eq!(a, vec!["--data-dir".to_string(), "D:\\x".to_string()]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn swap_in_place() {
+        let t = tempfile::tempdir().unwrap();
+        let exe = t.path().join("LL.exe");
+        std::fs::write(&exe, "#!/bin/sh\necho old\n").unwrap();
+        let upd = t.path().join("updates");
+        std::fs::create_dir_all(&upd).unwrap();
+        let new = upd.join("new.exe");
+        std::fs::write(&new, "#!/bin/sh\necho \"$@\" > \"$(dirname \"$0\")/ran.txt\"\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&new, std::fs::Permissions::from_mode(0o755)).unwrap();
+        swap_and_restart(&exe, &new, &["--data-dir".into(), "X".into()]).unwrap();
+        assert!(!new.exists());
+        assert_eq!(std::fs::read_to_string(exe.with_extension("exe.old")).unwrap(), "#!/bin/sh\necho old\n");
+        let ran = t.path().join("ran.txt");
+        for _ in 0..50 {
+            if ran.exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        let txt = std::fs::read_to_string(&ran).unwrap();
+        assert!(txt.starts_with("--data-dir X --after-update "), "{txt}");
     }
 }

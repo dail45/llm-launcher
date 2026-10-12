@@ -9,6 +9,7 @@ fn usage() {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    lll_core::update::wait_after_update();
     let mut args = std::env::args().skip(1);
     let mut set_pw: Option<String> = None;
     while let Some(a) = args.next() {
@@ -20,6 +21,9 @@ async fn main() -> Result<()> {
                 return Ok(());
             }
             "--minimized" => {}
+            "--after-update" => {
+                args.next();
+            }
             "-h" | "--help" => {
                 usage();
                 return Ok(());

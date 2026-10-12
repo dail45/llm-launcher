@@ -161,6 +161,8 @@ fn on_menu(app: &AppHandle, id: &str) {
 }
 
 fn main() {
+    // after a self-update: let the previous process exit first (single-instance lock, UI port)
+    lll_core::update::wait_after_update();
     let minimized_arg = std::env::args().any(|a| a == "--minimized");
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {

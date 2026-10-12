@@ -2314,7 +2314,7 @@ dependencies = [
 
 [[package]]
 name = "launcherd"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "lll-core",
@@ -2421,7 +2421,7 @@ checksum = "47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae"
 
 [[package]]
 name = "llama-launcher"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "lll-core",
@@ -2435,7 +2435,7 @@ dependencies = [
 
 [[package]]
 name = "lll-core"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "argon2",

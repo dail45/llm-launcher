@@ -310,12 +310,10 @@ impl App {
             self.refresh_snapshot();
             est = self.estimate_preset(&p, false)?;
         }
+        // the estimate is informational only: never refuse to start, llama-server decides
         if est.fit == Fit::No && !devs.is_empty() {
-            if !force {
-                let d = est.devices.iter().filter(|d| d.fit == Fit::No).map(|d| format!("{}: нужно {:.0} МиБ, свободно {:.0} МиБ", d.id, memory::mib(d.usage.total()), memory::mib(d.free))).collect::<Vec<_>>().join("; ");
-                bail!("не хватает памяти ({d}). Запустите с force, если уверены.");
-            }
-            warnings.push("Запуск без запаса памяти (force)".into());
+            let d = est.devices.iter().filter(|d| d.fit == Fit::No).map(|d| format!("{}: нужно {:.0} МиБ, свободно {:.0} МиБ", d.id, memory::mib(d.usage.total()), memory::mib(d.free))).collect::<Vec<_>>().join("; ");
+            tracing::info!("{preset_id}: по оценке памяти может не хватить ({d}), запускаю");
         }
         if !missing.is_empty() {
             warnings.push(format!("Нет фич: {}", missing.join(", ")));

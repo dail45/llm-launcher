@@ -76,7 +76,7 @@ export async function req<T = any>(method: string, path: string, body?: any): Pr
   let data: any = null
   try { data = text ? JSON.parse(text) : null } catch { data = text }
   if (!r.ok) {
-    const msg = data?.error?.message || data?.message || (typeof data === 'string' && data) || r.statusText
+    const msg = data?.error?.message || (typeof data?.error === 'string' && data.error) || data?.message || (typeof data === 'string' && data) || r.statusText
     throw new ApiErr(r.status, msg, data?.error?.code)
   }
   return data as T

@@ -291,6 +291,10 @@ pub struct Settings {
     /// PEM certificate chain and private key
     pub https_cert: String,
     pub https_key: String,
+    /// check GitHub for new launcher versions
+    pub app_update_check: bool,
+    /// also offer pre-releases
+    pub app_update_prerelease: bool,
 }
 
 impl Default for Settings {
@@ -347,6 +351,8 @@ impl Default for Settings {
             https_port: 8443,
             https_cert: String::new(),
             https_key: String::new(),
+            app_update_check: true,
+            app_update_prerelease: false,
         }
     }
 }

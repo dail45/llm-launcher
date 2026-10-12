@@ -64,7 +64,14 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         sub = sub.item(&MenuItem::with_id(app, format!("preset:{}", p.id), label, true, None::<&str>)?);
     }
     let sub = sub.build()?;
-    MenuBuilder::new(app)
+    let upd = lll_core::update::snapshot();
+    let mut mb = MenuBuilder::new(app);
+    if upd.available && upd.asset.is_some() {
+        mb = mb
+            .item(&MenuItem::with_id(app, "update", format!("⬆ Обновить до v{}", upd.latest.clone().unwrap_or_default()), true, None::<&str>)?)
+            .item(&PredefinedMenuItem::separator(app)?);
+    }
+    mb
         .item(&MenuItem::with_id(app, "open", "Открыть Llama Launcher", true, None::<&str>)?)
         .item(&PredefinedMenuItem::separator(app)?)
         .item(&sub)
@@ -117,6 +124,15 @@ fn on_menu(app: &AppHandle, id: &str) {
                     lll_core::gamemode::activate(c, "manual", "manual").await;
                 }
             });
+        }
+        "update" => {
+            tauri::async_runtime::spawn(async {
+                let c = core().clone();
+                if let Err(e) = lll_core::update::install(c.clone()) {
+                    c.bus.toast("error", "Обновление", e.to_string());
+                }
+            });
+            show_main(app);
         }
         "stop_all" => {
             tauri::async_runtime::spawn(async { core().pm.stop_all().await });
@@ -173,6 +189,10 @@ fn main() {
                 }
             };
             let _ = CORE.set(core_app.clone());
+            {
+                let h = handle.clone();
+                lll_core::update::set_exit_hook(move || h.exit(0));
+            }
 
             let icon = app.default_window_icon().cloned();
             let mut tb = TrayIconBuilder::with_id(TRAY_ID)
@@ -197,7 +217,7 @@ fn main() {
                 let mut last = std::time::Instant::now() - std::time::Duration::from_secs(10);
                 loop {
                     match rx.recv().await {
-                        Ok(Event::Instance { .. }) | Ok(Event::InstanceRemoved { .. }) | Ok(Event::Game { .. }) => {
+                        Ok(Event::Instance { .. }) | Ok(Event::InstanceRemoved { .. }) | Ok(Event::Game { .. }) | Ok(Event::Update { .. }) => {
                             let h = h2.clone();
                             let _ = h2.run_on_main_thread(move || refresh_tray(&h));
                         }

@@ -421,6 +421,7 @@ impl App {
     // ---------- background tasks
     pub fn spawn_background(self: &Arc<Self>) {
         crate::gamemode::spawn(self.clone());
+        crate::update::spawn(self.clone());
         // re-parse --help of builds whose cached schema is from an older parser
         let app = self.clone();
         tokio::spawn(async move {

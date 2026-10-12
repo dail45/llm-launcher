@@ -13,6 +13,7 @@ pub enum Event {
     Job { info: Value },
     Toast { level: String, title: String, message: String },
     Game { info: Value },
+    Update { info: Value },
 }
 
 #[derive(Clone)]

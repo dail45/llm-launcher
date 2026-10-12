@@ -85,6 +85,7 @@
   <div class="shell">
     <aside>
       <div class="logo">🦙 <b>Llama Launcher</b>{#if app.auth.version}<span class="ver" title={t('Версия')}>v{app.auth.version}</span>{/if}</div>
+      {#if app.update?.available}<a class="upd" href="#/settings?tab=update">⬆ {t('Доступна версия')} v{app.update.latest}</a>{/if}
       <nav>
         {#each nav as [p, ic, label]}
           <a href={'#' + p} class:on={isOn(p)}>
@@ -201,6 +202,7 @@
           <span class="sp"></span>
           {#if !app.auth.local}<button class="danger" onclick={() => app.logout()}>⏻ {t('Выйти')}</button>{/if}
         </div>
+        {#if app.update?.available}<a class="btn" style="justify-content:center" href="#/settings?tab=update">⬆ {t('Доступна версия')} v{app.update.latest}</a>{/if}
         {#if app.auth.version}<div class="tiny dim" style="text-align:center">Llama Launcher v{app.auth.version}</div>{/if}
       </div>
     {/if}
@@ -217,6 +219,7 @@
   .offline h2 { margin: 6px 0 0; }
   aside { width: 228px; flex: none; background: var(--bg2); border-right: 1px solid var(--line); display: flex; flex-direction: column; }
   .logo { padding: 16px 16px 12px; font-size: 15px; }
+  .upd { margin: -6px 16px 8px; font-size: 12px; padding: 3px 10px; border-radius: 99px; text-align: center; background: color-mix(in srgb, var(--ok) 20%, transparent); color: var(--ok); }
   .logo .ver { margin-left: 6px; font-size: 11px; color: var(--fg3); font-weight: 400; }
   aside nav { display: flex; flex-direction: column; padding: 4px 8px; gap: 1px; flex: 1; overflow: auto; }
   aside nav a { color: var(--fg2); padding: 7px 10px; border-radius: 7px; display: flex; align-items: center; gap: 10px; }

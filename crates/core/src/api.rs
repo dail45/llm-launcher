@@ -122,6 +122,9 @@ pub fn router(app: AppRef) -> Router {
         .route("/api/gamemode/deactivate", post(game_off))
         .route("/api/gamemode/processes", get(game_processes))
         // MCP
+        .route("/api/update", get(update_status))
+        .route("/api/update/check", post(update_check))
+        .route("/api/update/install", post(update_install))
         .route("/api/mcp/servers", get(mcp_list).post(mcp_create))
         .route("/api/mcp/servers/{id}", put(mcp_update).delete(mcp_delete))
         .route("/api/mcp/servers/{id}/reconnect", post(mcp_reconnect))
@@ -1287,4 +1290,16 @@ async fn chat_proxy(State(app): State<AppRef>, Admin(p, ip): Admin, req: Request
         Err(e) => return ApiError::bad(e.to_string()).into_response(),
     };
     crate::router::proxy_inner(app, p, ip.to_string(), parts.method, crate::router::strip_api_prefix(&path), headers, bytes).await
+}
+
+// ---------------- launcher self-update
+async fn update_status(_a: Admin) -> R<J> {
+    j(crate::update::snapshot())
+}
+async fn update_check(State(app): State<AppRef>, _a: Admin) -> R<J> {
+    j(crate::update::check(&app).await)
+}
+async fn update_install(State(app): State<AppRef>, _a: Admin) -> R<J> {
+    let id = crate::update::install(app.clone()).map_err(|e| ApiError::bad(e.to_string()))?;
+    j(json!({"job_id": id}))
 }

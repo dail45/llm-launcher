@@ -15,6 +15,7 @@ class AppState {
   jobs = $state<Record<string, any>>({})
   downloads = $state<Record<string, any>>({})
   game = $state<any>({})
+  update = $state<any>({})
   toasts = $state<Toast[]>([])
   logListeners = new Set<(e: any) => void>()
   route = $state(location.hash.slice(1) || '/')
@@ -78,6 +79,7 @@ class AppState {
         api.get('/api/downloads'),
         api.get('/api/gamemode').catch(() => ({})),
       ])
+      api.get('/api/update').then((u) => (this.update = u)).catch(() => {})
       this.game = game
       this.status = st
       this.instances = Object.fromEntries(inst.map((i: any) => [i.id, i]))
@@ -93,7 +95,11 @@ class AppState {
     this.es?.close()
     const es = new EventSource(eventsUrl())
     this.es = es
-    es.onopen = () => (this.sseOk = true)
+    es.onopen = () => {
+      this.sseOk = true
+      // after a self-update the server comes back with a new version: reload the UI
+      api.get('/api/version').then((v) => { if (this.auth.version && v.version && v.version !== this.auth.version) location.reload() }).catch(() => {})
+    }
     es.onerror = () => {
       this.sseOk = false
       if (es.readyState === EventSource.CLOSED) {
@@ -116,6 +122,7 @@ class AppState {
         case 'download': this.downloads[e.info.id] = e.info; break
         case 'toast': this.toast(e.level, e.title, e.message); break
         case 'game': this.game = e.info; break
+        case 'update': this.update = e.info; break
         case 'log': for (const f of this.logListeners) f(e); break
       }
     }

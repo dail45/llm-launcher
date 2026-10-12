@@ -320,6 +320,10 @@ pub fn sha256_file(p: &Path) -> Result<String> {
 /// Simple one-shot download with progress callback (used for backend archives).
 pub async fn download_to(app: &App, url: &str, dest: &Path, mut on_progress: impl FnMut(u64, u64)) -> Result<()> {
     let mut req = app.http.get(url);
+    if url.starts_with("https://api.github.com/") {
+        // release asset via the API (works for private repositories with a token)
+        req = req.header("Accept", "application/octet-stream");
+    }
     if let Some(h) = auth_header(app, url) {
         req = req.header("Authorization", h);
     }

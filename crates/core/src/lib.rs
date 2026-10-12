@@ -24,6 +24,7 @@ pub mod anthropic;
 pub mod gamemode;
 pub mod perplexity;
 pub mod mcp;
+pub mod update;
 pub mod api;
 pub mod server;
 

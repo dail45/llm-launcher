@@ -7,8 +7,13 @@
   import { confirmDlg } from '../lib/dialog.svelte'
   import Modal from '../components/Modal.svelte'
   import Qr from '../components/Qr.svelte'
+  import UpdateCard from '../components/UpdateCard.svelte'
 
-  let tab = $state('general')
+  let tab = $state(new URLSearchParams(app.route.split('?')[1] || '').get('tab') || 'general')
+  $effect(() => {
+    const q = new URLSearchParams(app.route.split('?')[1] || '').get('tab')
+    if (q) tab = q
+  })
   let s = $state<any>(null)
   let orig = ''
   let pw1 = $state('')
@@ -168,6 +173,7 @@
     <button class:on={tab === 'downloads'} onclick={() => (tab = 'downloads')}>{t('Загрузки')}</button>
     <button class:on={tab === 'game'} onclick={() => { tab = 'game'; loadGpuProcs() }}>🎮 {t('Игровой режим')}</button>
     <button class:on={tab === 'mcp'} onclick={() => { tab = 'mcp'; loadMcp() }}>MCP</button>
+    <button class:on={tab === 'update'} onclick={() => (tab = 'update')}>⬆ {t('Обновление')}{#if app.update?.available}<span class="badge ok">v{app.update.latest}</span>{/if}</button>
     <button class:on={tab === 'backup'} onclick={() => (tab = 'backup')}>{t('Бэкап и о программе')}</button>
   </div>
 
@@ -348,6 +354,8 @@
         {#if !gpuProcs.length}<div class="dim small">{t('Нет данных (статистика по процессам доступна в Windows 10/11)')}</div>{/if}
       </div>
     </div>
+  {:else if tab === 'update'}
+    <UpdateCard {s} />
   {:else if tab === 'mcp'}
     <div class="card col">
       <div class="row"><h3 style="margin:0">{t('MCP-серверы')}</h3><span class="sp"></span><button class="primary" onclick={() => editMcp()}>+ {t('Добавить')}</button></div>

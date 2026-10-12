@@ -128,6 +128,9 @@ check "mcp connected" "$(echo "$MS" | j 'd["status"]["connected"], d["status"]["
 check "mcp tools" "$(curl -s $API/mcp/tools | j '[t["function"] for t in d["tools"]]')" "['echo__echo', 'echo__add']"
 check "mcp call" "$(curl -s -XPOST $API/mcp/call -H 'content-type: application/json' -d "{\"server_id\":\"$MSID\",\"name\":\"add\",\"arguments\":{\"a\":2,\"b\":3}}" | j 'd["text"]')" "5"
 check "mcp bad server" "$(curl -s -XPOST $API/mcp/servers -H 'content-type: application/json' -d '{"name":"bad","command":"/nonexistent/mcp","enabled":true}' | j 'd["status"]["connected"]')" "False"
+# self-update API (non-Windows: unsupported)
+check "update kind" "$(curl -s $API/update | j 'd["kind"]')" "unsupported"
+check "update install refused" "$(curl -s -o /dev/null -w '%{http_code}' -XPOST $API/update/install)" "400"
 # PWA files + optional HTTPS listener
 check "manifest" "$(curl -s -o /dev/null -w '%{content_type}' http://127.0.0.1:8090/manifest.webmanifest)" "application/manifest+json"
 check "sw no-cache" "$(curl -sI http://127.0.0.1:8090/sw.js | grep -ci 'cache-control: no-cache')" "1"

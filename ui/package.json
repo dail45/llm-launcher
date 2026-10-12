@@ -17,6 +17,8 @@
     "vite": "^7.1.0"
   },
   "dependencies": {
+    "dompurify": "^3.4.17",
+    "marked": "^15.0.12",
     "qrcode-generator": "^1.5.2"
   }
 }

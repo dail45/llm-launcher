@@ -96,7 +96,12 @@ class H(BaseHTTPRequestHandler):
                 self.send_response(200); self.send_header("Content-Type", "text/event-stream"); self.end_headers()
                 for w in ["Let me", " think", " about it..."]:
                     self.wfile.write(f"data: {json.dumps({'choices':[{'delta':{'reasoning_content':w}}]})}\n\n".encode()); self.wfile.flush(); time.sleep(float(os.environ.get('FAKE_STREAM_DELAY', '0.05')))
-                for w in ["Hello", " from", " " + alias]:
+                last = str(msgs[-1].get("content", "")) if msgs else ""
+                words = ["Hello", " from", " " + alias]
+                if "md" in last.split():
+                    md = "## Пример\n\nТекст с **жирным**, *курсивом* и `кодом`.\n\n- пункт 1\n- пункт 2\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\n```python\ndef hello():\n    print(\"hi\")\n```\n\n<script>alert(1)</script>Готово."
+                    words = [md[i:i+6] for i in range(0, len(md), 6)]
+                for w in words:
                     self.wfile.write(f"data: {json.dumps({'choices':[{'delta':{'content':w}}]})}\n\n".encode()); self.wfile.flush(); time.sleep(float(os.environ.get('FAKE_STREAM_DELAY', '0.05')))
                 self.wfile.write(f"data: {json.dumps({'choices':[], 'timings': {'cache_n': 20, 'prompt_n': 5, 'predicted_n': 3, 'predicted_per_second': 42.5}})}\n\n".encode())
                 self.wfile.write(b"data: [DONE]\n\n"); self.wfile.flush(); return

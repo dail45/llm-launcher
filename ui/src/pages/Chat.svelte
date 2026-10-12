@@ -24,6 +24,7 @@
   import { app } from '../lib/state.svelte'
   import { t } from '../lib/i18n.svelte'
   import { copy } from '../lib/fmt'
+  import { renderMarkdown, setCopyLabel } from '../lib/markdown'
 
 
   let models = $state<any[]>([])
@@ -241,9 +242,16 @@
   function stop() {
     ctrl?.abort()
   }
-  function blocks(s: string) {
-    const parts = s.split(/```/)
-    return parts.map((p, i) => (i % 2 ? { code: true, text: p.replace(/^[\w+-]*\n/, '') } : { code: false, text: p }))
+  setCopyLabel(t('Копировать'))
+  // copy buttons inside rendered code blocks (event delegation: the HTML comes from {@html})
+  async function onMsgsClick(e: MouseEvent) {
+    const b = (e.target as HTMLElement).closest('.cbcopy') as HTMLButtonElement | null
+    if (!b) return
+    const code = b.closest('.cb')?.querySelector('code')?.textContent ?? ''
+    await copy(code)
+    b.textContent = '✓ ' + t('Скопировано')
+    b.classList.add('done')
+    setTimeout(() => { b.textContent = '📋 ' + t('Копировать'); b.classList.remove('done') }, 1500)
   }
   function key(e: KeyboardEvent) {
     // on touch keyboards Enter inserts a new line; sending is done with the button
@@ -290,7 +298,8 @@
           </div>
         </div>
       {/if}
-      <div class="msgs" bind:this={box}>
+      <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+      <div class="msgs" bind:this={box} onclick={onMsgsClick}>
         {#if !cur.messages.length}<div class="empty">{t('Напишите сообщение. Ответ и размышления модели отображаются по мере генерации.')}</div>{/if}
         {#each cur.messages as m, i}
           {#if m.role !== 'tool'}
@@ -304,9 +313,9 @@
             {:else if m.thinking && !m.content}
               <div class="dim small"><span class="spin"></span> {t('Ожидание ответа… (модель может загружаться)')}</div>
             {/if}
-            {#each blocks(m.content) as b}
-              {#if b.code}<pre class="code">{b.text}</pre>{:else if b.text}<div class="tx">{b.text}</div>{/if}
-            {/each}
+            {#if m.role === 'assistant'}
+              {#if m.content}<div class="md">{@html renderMarkdown(m.content)}</div>{/if}
+            {:else if m.content}<div class="tx">{m.content}</div>{/if}
             {#each m.tool_calls || [] as call}
               <div class="call {call.status}">
                 <button class="ghost sm hdr" onclick={() => (call.open = !call.open)}>
@@ -359,6 +368,30 @@
   .msg { max-width: 860px; padding: 10px 14px; border-radius: 12px; background: var(--bg2); border: 1px solid var(--line); }
   .msg.user { align-self: flex-end; background: color-mix(in srgb, var(--acc) 14%, var(--bg2)); }
   .tx { white-space: pre-wrap; word-break: break-word; }
+  /* rendered markdown */
+  .md { word-break: break-word; line-height: 1.55; }
+  .md :global(> :first-child) { margin-top: 0; }
+  .md :global(> :last-child) { margin-bottom: 0; }
+  .md :global(p) { margin: 0 0 .6em; }
+  .md :global(h1), .md :global(h2), .md :global(h3), .md :global(h4) { margin: .9em 0 .4em; line-height: 1.3; color: var(--fg); }
+  .md :global(h1) { font-size: 1.3em; } .md :global(h2) { font-size: 1.18em; } .md :global(h3) { font-size: 1.06em; } .md :global(h4) { font-size: 1em; }
+  .md :global(ul), .md :global(ol) { margin: 0 0 .6em; padding-left: 1.5em; }
+  .md :global(li) { margin: .15em 0; }
+  .md :global(li > p) { margin: 0; }
+  .md :global(blockquote) { margin: 0 0 .6em; padding: 2px 12px; border-left: 3px solid var(--line); color: var(--fg2); }
+  .md :global(hr) { border: 0; border-top: 1px solid var(--line); margin: .8em 0; }
+  .md :global(a) { color: var(--acc); }
+  .md :global(:not(pre) > code) { background: var(--bg4); padding: 1px 5px; border-radius: 4px; font-size: .9em; }
+  .md :global(table) { border-collapse: collapse; margin: 0 0 .6em; display: block; overflow-x: auto; width: max-content; max-width: 100%; }
+  .md :global(th), .md :global(td) { border: 1px solid var(--line); padding: 4px 9px; }
+  .md :global(th) { background: var(--bg3); color: var(--fg); }
+  .md :global(img) { max-width: 100%; }
+  .md :global(.cb) { margin: .5em 0 .7em; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--bg); }
+  .md :global(.cbh) { display: flex; align-items: center; justify-content: space-between; padding: 3px 6px 3px 10px; background: var(--bg3); border-bottom: 1px solid var(--line); font-size: 12px; color: var(--fg3); font-family: var(--mono); }
+  .md :global(.cbcopy) { padding: 2px 8px; font-size: 12px; background: transparent; border-color: transparent; color: var(--fg2); }
+  .md :global(.cbcopy:hover) { background: var(--bg4); color: var(--fg); }
+  .md :global(.cbcopy.done) { color: var(--ok); }
+  .md :global(.cb pre) { margin: 0; border: 0; border-radius: 0; padding: 10px 12px; white-space: pre; overflow-x: auto; word-break: normal; background: transparent; }
   .code { margin: 6px 0; }
   .think { margin-bottom: 6px; border-left: 3px solid var(--fg3); padding-left: 10px; }
   .think summary { cursor: pointer; color: var(--fg2); }

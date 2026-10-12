@@ -36,7 +36,18 @@ pub struct SystemSnapshot {
     pub ts: i64,
 }
 
+/// GPU usage of one OS process (for game-mode detection).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GpuProc {
+    pub pid: u32,
+    /// dedicated VRAM, bytes
+    pub vram: u64,
+    /// 3D engine utilization, % (Windows only)
+    pub util: f32,
+}
+
 pub struct Monitor {
+    procs: Mutex<Vec<GpuProc>>,
     nvml: Option<nvml_wrapper::Nvml>,
     sys: Mutex<System>,
     #[cfg(windows)]
@@ -69,6 +80,7 @@ impl Monitor {
         sys.refresh_memory();
         sys.refresh_cpu_all();
         Self {
+            procs: Mutex::new(vec![]),
             nvml,
             sys: Mutex::new(sys),
             #[cfg(windows)]
@@ -88,6 +100,7 @@ impl Monitor {
                 .running_compute_processes()
                 .unwrap_or_default()
                 .into_iter()
+                .chain(d.running_graphics_processes().unwrap_or_default())
                 .filter_map(|p| match p.used_gpu_memory {
                     nvml_wrapper::enums::device::UsedGpuMemory::Used(b) => Some((p.pid, b)),
                     _ => None,
@@ -112,13 +125,19 @@ impl Monitor {
         out
     }
 
+    /// Per-process GPU usage from the last sample.
+    pub fn gpu_procs(&self) -> Vec<GpuProc> {
+        self.procs.lock().clone()
+    }
+
     pub fn gpus(&self) -> Vec<GpuInfo> {
         let nv = self.nvml_gpus();
         #[cfg(windows)]
         {
             let mut list = win::dxgi_adapters();
             if let Some(p) = self.pdh.lock().as_mut() {
-                let (usage, util) = p.sample();
+                let (usage, util, procs) = p.sample();
+                *self.procs.lock() = procs;
                 for g in list.iter_mut() {
                     if let Some(l) = &g.luid {
                         if let Some(u) = usage.get(l) {
@@ -154,6 +173,11 @@ impl Monitor {
         }
         #[cfg(not(windows))]
         {
+            let mut m: std::collections::HashMap<u32, u64> = Default::default();
+            for (pid, b) in nv.iter().flat_map(|g| g.processes.iter()) {
+                *m.entry(*pid).or_insert(0) += *b;
+            }
+            *self.procs.lock() = m.into_iter().map(|(pid, vram)| GpuProc { pid, vram, util: 0.0 }).collect();
             nv
         }
     }
@@ -275,6 +299,7 @@ mod win {
         query: PDH_HQUERY,
         mem: PDH_HCOUNTER,
         util: PDH_HCOUNTER,
+        pmem: PDH_HCOUNTER,
     }
     unsafe impl Send for Pdh {}
 
@@ -297,8 +322,11 @@ mod win {
                     anyhow::bail!("PDH counter unavailable");
                 }
                 let _ = PdhAddEnglishCounterW(q, PCWSTR(p2.as_ptr()), 0, &mut util);
+                let mut pmem = PDH_HCOUNTER::default();
+                let p3 = wide("\\GPU Process Memory(*)\\Dedicated Usage");
+                let _ = PdhAddEnglishCounterW(q, PCWSTR(p3.as_ptr()), 0, &mut pmem);
                 let _ = PdhCollectQueryData(q);
-                Ok(Self { query: q, mem, util })
+                Ok(Self { query: q, mem, util, pmem })
             }
         }
 
@@ -325,13 +353,23 @@ mod win {
             out
         }
 
-        /// (dedicated usage by luid, utilization% by luid)
-        pub fn sample(&mut self) -> (HashMap<String, u64>, HashMap<String, f32>) {
+        /// (dedicated usage by luid, utilization% by luid, per-process usage)
+        pub fn sample(&mut self) -> (HashMap<String, u64>, HashMap<String, f32>, Vec<GpuProc>) {
             let mut usage = HashMap::new();
             let mut util: HashMap<String, f32> = HashMap::new();
             unsafe {
                 if PdhCollectQueryData(self.query) != 0 {
-                    return (usage, util);
+                    return (usage, util, vec![]);
+                }
+            }
+            // instance names look like pid_1234_luid_0x..._phys_0[_eng_0_engtype_3D]
+            let pid_of = |n: &str| -> Option<u32> { n.strip_prefix("pid_")?.split('_').next()?.parse().ok() };
+            let mut procs: HashMap<u32, GpuProc> = HashMap::new();
+            if !self.pmem.0.is_null() {
+                for (name, _, large) in self.array(self.pmem, PDH_FMT_LARGE) {
+                    if let Some(pid) = pid_of(&name) {
+                        procs.entry(pid).or_insert(GpuProc { pid, ..Default::default() }).vram += large.max(0) as u64;
+                    }
                 }
             }
             let luid_of = |n: &str| -> Option<String> {
@@ -350,13 +388,18 @@ mod win {
             for (name, dbl, _) in self.array(self.util, PDH_FMT_DOUBLE) {
                 if let (Some(l), Some(e)) = (luid_of(&name), name.split("engtype_").nth(1)) {
                     *per.entry((l, e.to_string())).or_insert(0.0) += dbl;
+                    if e.eq_ignore_ascii_case("3D") {
+                        if let Some(pid) = pid_of(&name) {
+                            procs.entry(pid).or_insert(GpuProc { pid, ..Default::default() }).util += dbl as f32;
+                        }
+                    }
                 }
             }
             for ((l, _), v) in per {
                 let e = util.entry(l).or_insert(0.0);
                 *e = e.max(v.min(100.0) as f32);
             }
-            (usage, util)
+            (usage, util, procs.into_values().map(|mut p| { p.util = p.util.min(100.0); p }).collect())
         }
     }
 }

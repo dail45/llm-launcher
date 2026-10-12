@@ -29,6 +29,8 @@ pub struct App {
     pub downloads: crate::downloads::Downloads,
     pub jobs: crate::jobs::Jobs,
     restart_counts: parking_lot::Mutex<HashMap<String, (u32, i64)>>,
+    pub game: crate::gamemode::GameMode,
+    pub mcp: crate::mcp::Mcp,
 }
 
 pub type AppRef = Arc<App>;
@@ -67,6 +69,8 @@ impl App {
             snapshot: RwLock::new(snap),
             start_locks: Default::default(),
             restart_counts: Default::default(),
+            game: Default::default(),
+            mcp: Default::default(),
         });
         Ok(app)
     }
@@ -356,6 +360,12 @@ impl App {
 
     /// Ensure preset is running and ready (used by the router).
     pub async fn ensure_ready(self: &Arc<Self>, preset_id: &str, can_load: bool) -> Result<Arc<Instance>> {
+        let alive = self.pm.get(preset_id).map(|i| i.state().is_alive()).unwrap_or(false);
+        if !alive {
+            if let Some(msg) = self.game.blocked(self) {
+                bail!(msg);
+            }
+        }
         if let Some(i) = self.pm.get(preset_id) {
             match i.state() {
                 InstState::Ready => {
@@ -410,6 +420,7 @@ impl App {
 
     // ---------- background tasks
     pub fn spawn_background(self: &Arc<Self>) {
+        crate::gamemode::spawn(self.clone());
         // monitor
         let app = self.clone();
         tokio::spawn(async move {

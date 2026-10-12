@@ -25,6 +25,8 @@ fn oai_error(status: StatusCode, msg: &str, code: &str) -> Response {
 pub fn router(app: AppRef) -> Router {
     Router::new()
         .route("/v1/models", get(list_models))
+        .route("/v1/messages", axum::routing::post(crate::anthropic::messages))
+        .route("/v1/messages/count_tokens", axum::routing::post(crate::anthropic::count_tokens))
         .route("/health", get(|| async { Json(json!({"status": "ok"})) }))
         .route("/instance/{alias}/{*rest}", any(native_proxy))
         .route("/instance/{alias}/", any(native_proxy_root))
@@ -119,10 +121,20 @@ pub async fn proxy_inner(app: AppRef, p: Principal, ip: String, method: Method, 
         .and_then(|v| v.get("model").and_then(|m| m.as_str()).map(String::from))
         .or_else(|| path.split_once('?').and_then(|(_, q)| q.split('&').find_map(|kv| kv.strip_prefix("model=").map(String::from))));
 
-    let (alias, cands) = match model_name.as_deref().filter(|s| !s.is_empty()) {
+    let (alias, inst) = match pick_instance(&app, &p, model_name.as_deref()).await {
+        Ok(x) => x,
+        Err((st, msg, code)) => return oai_error(st, &msg, code),
+    };
+    let (user_id, user) = p.user();
+    forward(&app, inst, method, &path, &headers, bytes, LogCtx { alias, principal: p.label(), user_id, user, ip, path: path.clone() }).await
+}
+
+/// Resolve the model name (alias / preset) to a ready instance, starting it if needed.
+pub async fn pick_instance(app: &AppRef, p: &Principal, model: Option<&str>) -> Result<(String, Arc<Instance>), (StatusCode, String, &'static str)> {
+    let (alias, cands) = match model.filter(|s| !s.is_empty()) {
         Some(m) => match app.resolve(m) {
             Some(x) => x,
-            None => return oai_error(StatusCode::NOT_FOUND, &format!("модель «{m}» не найдена (нет такого алиаса)"), "model_not_found"),
+            None => return Err((StatusCode::NOT_FOUND, format!("модель «{m}» не найдена (нет такого алиаса)"), "model_not_found")),
         },
         None => {
             let alive = app.pm.alive();
@@ -132,20 +144,18 @@ pub async fn proxy_inner(app: AppRef, p: Principal, ip: String, method: Method, 
             } else if let Some(x) = app.resolve("default") {
                 x
             } else {
-                return oai_error(StatusCode::BAD_REQUEST, "не указано поле model", "model_required");
+                return Err((StatusCode::BAD_REQUEST, "не указано поле model".into(), "model_required"));
             }
         }
     };
     if !p.allows_alias(&alias) {
-        return oai_error(StatusCode::FORBIDDEN, "у ключа нет доступа к этой модели", "forbidden");
+        return Err((StatusCode::FORBIDDEN, "у ключа нет доступа к этой модели".into(), "forbidden"));
     }
-    let Some(pid) = app.choose_candidate(&cands) else { return oai_error(StatusCode::NOT_FOUND, "у алиаса нет пресетов", "model_not_found") };
-    let inst = match app.ensure_ready(&pid, p.can_load()).await {
-        Ok(i) => i,
-        Err(e) => return oai_error(StatusCode::SERVICE_UNAVAILABLE, &e.to_string(), "model_load_failed"),
-    };
-    let (user_id, user) = p.user();
-    forward(&app, inst, method, &path, &headers, bytes, LogCtx { alias, principal: p.label(), user_id, user, ip, path: path.clone() }).await
+    let Some(pid) = app.choose_candidate(&cands) else { return Err((StatusCode::NOT_FOUND, "у алиаса нет пресетов".into(), "model_not_found")) };
+    match app.ensure_ready(&pid, p.can_load()).await {
+        Ok(i) => Ok((alias, i)),
+        Err(e) => Err((StatusCode::SERVICE_UNAVAILABLE, e.to_string(), "model_load_failed")),
+    }
 }
 
 pub struct LogCtx {
@@ -289,7 +299,18 @@ fn hop_by_hop(h: &str) -> bool {
     matches!(h, "connection" | "keep-alive" | "proxy-authenticate" | "proxy-authorization" | "te" | "trailers" | "transfer-encoding" | "upgrade" | "host" | "content-length" | "authorization" | "x-api-key")
 }
 
-pub async fn forward(app: &AppRef, inst: Arc<Instance>, method: Method, path: &str, headers: &HeaderMap, body: Bytes, ctx: LogCtx) -> Response {
+pub type ByteStream = futures::stream::BoxStream<'static, Result<Bytes, std::io::Error>>;
+
+/// Upstream response whose body stream keeps the request accounting guard alive.
+pub struct Upstream {
+    pub status: StatusCode,
+    pub headers: HeaderMap,
+    pub body: ByteStream,
+}
+
+/// Send a request to llama-server; usage is parsed from the (upstream, OpenAI-format) body tail
+/// when the returned stream is dropped.
+pub async fn forward_raw(app: &AppRef, inst: Arc<Instance>, method: Method, path: &str, headers: &HeaderMap, body: Bytes, ctx: LogCtx) -> Result<Upstream, String> {
     let url = format!("{}{}", inst.base_url(), path);
     inst.active.fetch_add(1, Ordering::Relaxed);
     inst.touch();
@@ -300,7 +321,7 @@ pub async fn forward(app: &AppRef, inst: Arc<Instance>, method: Method, path: &s
     let client = reqwest::Client::new();
     let mut rb = client.request(reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap_or(reqwest::Method::POST), &url);
     for (k, v) in headers {
-        if !hop_by_hop(k.as_str()) {
+        if !hop_by_hop(k.as_str()) && !k.as_str().starts_with("anthropic-") {
             rb = rb.header(k.as_str(), v.as_bytes());
         }
     }
@@ -308,7 +329,7 @@ pub async fn forward(app: &AppRef, inst: Arc<Instance>, method: Method, path: &s
         Ok(r) => r,
         Err(e) => {
             guard.status = 502;
-            return oai_error(StatusCode::BAD_GATEWAY, &format!("ошибка связи с llama-server: {e}"), "upstream_error");
+            return Err(format!("ошибка связи с llama-server: {e}"));
         }
     };
     let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
@@ -339,12 +360,21 @@ pub async fn forward(app: &AppRef, inst: Arc<Instance>, method: Method, path: &s
                 t.drain(..len - 8192);
             }
         }
-        chunk
+        chunk.map_err(std::io::Error::other)
     });
-    let mut r = Response::new(Body::from_stream(stream));
-    *r.status_mut() = status;
-    *r.headers_mut() = out_headers;
-    r
+    Ok(Upstream { status, headers: out_headers, body: stream.boxed() })
+}
+
+pub async fn forward(app: &AppRef, inst: Arc<Instance>, method: Method, path: &str, headers: &HeaderMap, body: Bytes, ctx: LogCtx) -> Response {
+    match forward_raw(app, inst, method, path, headers, body, ctx).await {
+        Ok(u) => {
+            let mut r = Response::new(Body::from_stream(u.body));
+            *r.status_mut() = u.status;
+            *r.headers_mut() = u.headers;
+            r
+        }
+        Err(e) => oai_error(StatusCode::BAD_GATEWAY, &e, "upstream_error"),
+    }
 }
 
 #[cfg(test)]

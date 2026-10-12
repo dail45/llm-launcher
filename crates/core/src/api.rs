@@ -114,6 +114,19 @@ pub fn router(app: AppRef) -> Router {
         // bench
         .route("/api/bench", get(list_bench).post(start_bench))
         .route("/api/bench/{id}", delete(delete_bench))
+        .route("/api/perplexity", get(list_ppl).post(start_ppl).delete(clear_ppl))
+        .route("/api/perplexity/{id}", delete(delete_ppl))
+        // game mode
+        .route("/api/gamemode", get(game_status))
+        .route("/api/gamemode/activate", post(game_on))
+        .route("/api/gamemode/deactivate", post(game_off))
+        .route("/api/gamemode/processes", get(game_processes))
+        // MCP
+        .route("/api/mcp/servers", get(mcp_list).post(mcp_create))
+        .route("/api/mcp/servers/{id}", put(mcp_update).delete(mcp_delete))
+        .route("/api/mcp/servers/{id}/reconnect", post(mcp_reconnect))
+        .route("/api/mcp/tools", get(mcp_tools))
+        .route("/api/mcp/call", post(mcp_call))
         // router info & chat proxy
         .route("/api/router/requests", get(router_requests))
         .route("/api/analytics", get(analytics).delete(analytics_clear))
@@ -1091,7 +1104,133 @@ async fn delete_bench(State(app): State<AppRef>, _a: Admin, Path(id): Path<Strin
     ok()
 }
 
-// ---------------- router info + chat proxy
+// ---------------- perplexity / KLD
+async fn list_ppl(State(app): State<AppRef>, _a: Admin) -> R<J> {
+    let mut v: Vec<crate::perplexity::PplRun> = app.store.list("ppl_runs")?;
+    v.sort_by_key(|r| std::cmp::Reverse(r.created_at));
+    j(v)
+}
+async fn start_ppl(State(app): State<AppRef>, _a: Admin, Json(r): Json<crate::perplexity::PplReq>) -> R<J> {
+    let id = crate::perplexity::start(app.clone(), r)?;
+    j(json!({"job_id": id}))
+}
+async fn delete_ppl(State(app): State<AppRef>, _a: Admin, Path(id): Path<String>) -> R<J> {
+    // id may be a run id or a whole comparison group
+    let v: Vec<crate::perplexity::PplRun> = app.store.list("ppl_runs")?;
+    for r in v.iter().filter(|r| r.id == id || r.group == id) {
+        app.store.delete("ppl_runs", &r.id)?;
+    }
+    ok()
+}
+async fn clear_ppl(State(app): State<AppRef>, _a: Admin) -> R<J> {
+    let v: Vec<crate::perplexity::PplRun> = app.store.list("ppl_runs")?;
+    for r in v {
+        app.store.delete("ppl_runs", &r.id)?;
+    }
+    ok()
+}
+
+// ---------------- game mode
+async fn game_status(State(app): State<AppRef>, _a: Admin) -> R<J> {
+    j(crate::gamemode::status_json(&app))
+}
+async fn game_on(State(app): State<AppRef>, _a: Admin) -> R<J> {
+    if !app.game.snapshot().active {
+        crate::gamemode::activate(&app, "manual", "manual").await;
+    }
+    j(crate::gamemode::status_json(&app))
+}
+async fn game_off(State(app): State<AppRef>, _a: Admin) -> R<J> {
+    crate::gamemode::deactivate(&app, true).await;
+    j(crate::gamemode::status_json(&app))
+}
+/// Processes currently using the GPU (helps to fill the game / ignore lists).
+async fn game_processes(State(app): State<AppRef>, _a: Admin) -> R<J> {
+    let procs = app.monitor.gpu_procs();
+    let v = tokio::task::spawn_blocking(move || {
+        let mut sys = sysinfo::System::new();
+        sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+        let mut out: Vec<Value> = procs
+            .into_iter()
+            .filter_map(|g| sys.process(sysinfo::Pid::from_u32(g.pid)).map(|p| json!({"pid": g.pid, "name": p.name().to_string_lossy(), "vram": g.vram, "util": g.util})))
+            .collect();
+        out.sort_by(|a, b| b["vram"].as_u64().cmp(&a["vram"].as_u64()));
+        out
+    })
+    .await
+    .unwrap_or_default();
+    j(json!({"processes": v, "ignore_builtin": crate::gamemode::DEFAULT_IGNORE}))
+}
+
+// ---------------- MCP
+async fn mcp_list(State(app): State<AppRef>, _a: Admin) -> R<J> {
+    let v: Vec<Value> = crate::mcp::Mcp::servers(&app)
+        .into_iter()
+        .map(|s| {
+            let st = app.mcp.status(&s.id);
+            let mut o = serde_json::to_value(&s).unwrap_or_default();
+            o["status"] = serde_json::to_value(st).unwrap_or_default();
+            o
+        })
+        .collect();
+    j(v)
+}
+async fn mcp_create(State(app): State<AppRef>, _a: Admin, Json(s): Json<crate::mcp::McpServerCfg>) -> R<J> {
+    if s.name.trim().is_empty() {
+        return Err(ApiError::bad("укажите имя"));
+    }
+    let s = crate::mcp::new_server(crate::mcp::McpServerCfg { id: String::new(), ..s });
+    app.store.put("mcp_servers", &s.id, &s)?;
+    let st = if s.enabled { Some(app.mcp.reconnect(&app, &s.id).await?) } else { None };
+    j(json!({"server": s, "status": st}))
+}
+async fn mcp_update(State(app): State<AppRef>, _a: Admin, Path(id): Path<String>, Json(mut s): Json<crate::mcp::McpServerCfg>) -> R<J> {
+    let old: crate::mcp::McpServerCfg = app.store.get("mcp_servers", &id)?.ok_or_else(|| ApiError::not_found("сервер не найден"))?;
+    s.id = id.clone();
+    s.created_at = old.created_at;
+    app.store.put("mcp_servers", &id, &s)?;
+    let st = if s.enabled { Some(app.mcp.reconnect(&app, &id).await?) } else { app.mcp.disconnect(&id); None };
+    j(json!({"server": s, "status": st}))
+}
+async fn mcp_delete(State(app): State<AppRef>, _a: Admin, Path(id): Path<String>) -> R<J> {
+    app.mcp.disconnect(&id);
+    app.store.delete("mcp_servers", &id)?;
+    ok()
+}
+async fn mcp_reconnect(State(app): State<AppRef>, _a: Admin, Path(id): Path<String>) -> R<J> {
+    j(app.mcp.reconnect(&app, &id).await?)
+}
+async fn mcp_tools(State(app): State<AppRef>, _a: Admin) -> R<J> {
+    let (tools, errors) = app.mcp.tools(&app).await;
+    let t: Vec<Value> = tools
+        .into_iter()
+        .map(|t| {
+            let f = crate::mcp::fn_name(&t.server, &t.name);
+            let mut o = serde_json::to_value(&t).unwrap_or_default();
+            o["function"] = json!(f);
+            o
+        })
+        .collect();
+    j(json!({"tools": t, "errors": errors.into_iter().map(|(s, e)| json!({"server": s, "error": e})).collect::<Vec<_>>()}))
+}
+#[derive(Deserialize)]
+struct McpCallReq {
+    server_id: String,
+    name: String,
+    #[serde(default)]
+    arguments: Value,
+}
+async fn mcp_call(State(app): State<AppRef>, _a: Admin, Json(r): Json<McpCallReq>) -> R<J> {
+    let args = if r.arguments.is_null() { json!({}) } else { r.arguments };
+    match app.mcp.call(&app, &r.server_id, &r.name, args).await {
+        Ok(v) => {
+            let (text, images) = crate::mcp::result_text(&v);
+            j(json!({"ok": true, "text": text, "images": images, "is_error": v.get("isError").and_then(|e| e.as_bool()).unwrap_or(false), "raw": v}))
+        }
+        Err(e) => j(json!({"ok": false, "text": format!("Error: {e}"), "images": [], "is_error": true})),
+    }
+}
+
 #[derive(Deserialize)]
 struct LimitQ {
     limit: Option<i64>,

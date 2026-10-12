@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 pub const COLLECTIONS: &[&str] = &[
     "backends", "model_dirs", "models", "presets", "preset_history", "aliases", "alias_groups",
-    "api_keys", "sessions", "bench_runs", "mem_calibration", "downloads", "gh_sources",
+    "api_keys", "sessions", "bench_runs", "mem_calibration", "downloads", "gh_sources", "ppl_runs", "mcp_servers",
 ];
 
 #[derive(Clone)]

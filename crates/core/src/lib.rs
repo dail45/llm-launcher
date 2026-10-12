@@ -20,6 +20,10 @@ pub mod hf;
 pub mod jobs;
 pub mod http_util;
 pub mod router;
+pub mod anthropic;
+pub mod gamemode;
+pub mod perplexity;
+pub mod mcp;
 pub mod api;
 pub mod server;
 

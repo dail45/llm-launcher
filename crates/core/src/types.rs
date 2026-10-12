@@ -267,6 +267,24 @@ pub struct Settings {
     pub start_minimized: bool,
     /// how long per-request token usage is kept for analytics (0 = forever)
     pub usage_retention_days: u32,
+    /// game mode: unload models while a game / heavy GPU app runs
+    pub game_mode: bool,
+    /// detect games automatically by GPU load of other processes
+    pub game_auto_detect: bool,
+    /// explicit game executables (e.g. "eldenring.exe")
+    pub game_processes: Vec<String>,
+    /// never treat these as games (in addition to the built-in list)
+    pub game_ignore: Vec<String>,
+    /// auto-detect thresholds
+    pub game_gpu_util: u32,
+    pub game_vram_mib: u64,
+    pub game_unload_pinned: bool,
+    /// the router does not load models while the mode is on
+    pub game_block_loads: bool,
+    /// start the unloaded presets again when the game exits
+    pub game_restore: bool,
+    /// seconds without a game before the mode turns off
+    pub game_grace_secs: u64,
 }
 
 impl Default for Settings {
@@ -309,6 +327,16 @@ impl Default for Settings {
             check_updates: true,
             start_minimized: false,
             usage_retention_days: 365,
+            game_mode: true,
+            game_auto_detect: true,
+            game_processes: vec![],
+            game_ignore: vec![],
+            game_gpu_util: 60,
+            game_vram_mib: 3072,
+            game_unload_pinned: true,
+            game_block_loads: true,
+            game_restore: false,
+            game_grace_secs: 20,
         }
     }
 }

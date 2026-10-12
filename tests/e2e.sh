@@ -45,6 +45,19 @@ check "offload parsed" "$(curl -s $API/instances | j 'd[0]["offloaded"]')" "33/3
 sleep 1
 check "request log tps" "$(curl -s $API/router/requests | j 'd[0].get("tps")')" "42.5"
 check "chat proxy via UI api" "$(curl -s -XPOST $API/v1/chat/completions -H 'content-type: application/json' -d '{"model":"coder","messages":[]}' | j 'd["model"]')" "coder"
+# Anthropic Messages API
+AM=$(curl -s -XPOST $RT/v1/messages -H 'content-type: application/json' -H 'anthropic-version: 2023-06-01' -d '{"model":"coder","max_tokens":50,"messages":[{"role":"user","content":"hi"}]}')
+check "anthropic message" "$(echo "$AM" | j 'd["type"], d["content"][0]["text"], d["usage"]["input_tokens"], d["stop_reason"]')" "message hi from coder 5 end_turn"
+AS=$(curl -sN -XPOST $RT/v1/messages -H 'content-type: application/json' -d '{"model":"coder","max_tokens":50,"stream":true,"messages":[{"role":"user","content":"hi"}]}')
+check "anthropic stream events" "$(echo "$AS" | grep '^event:' | sort | uniq -c | awk '{print $3":"$1}' | tr '\n' ' ')" "content_block_delta:6 content_block_start:2 content_block_stop:2 message_delta:1 message_start:1 message_stop:1 ping:1 "
+check "anthropic thinking+text" "$(echo "$AS" | grep -c 'thinking_delta')/$(echo "$AS" | grep -o '"text": *"[^"]*"' | tr -d '\n' | grep -c coder)" "3/1"
+check "anthropic stream usage" "$(echo "$AS" | grep -A1 '^event: message_delta' | tail -1 | sed 's/^data: //' | j 'd["usage"]["output_tokens"], d["usage"]["cache_read_input_tokens"]')" "3 20"
+AT=$(curl -s -XPOST $RT/v1/messages -H 'content-type: application/json' -d '{"model":"coder","max_tokens":50,"tools":[{"name":"echo","description":"e","input_schema":{"type":"object"}}],"messages":[{"role":"user","content":"use tool"}]}')
+check "anthropic tool_use" "$(echo "$AT" | j 'd["stop_reason"], d["content"][0]["type"], d["content"][0]["name"], d["content"][0]["input"]')" "tool_use tool_use echo {'text': 'ping'}"
+AR=$(curl -s -XPOST $RT/v1/messages -H 'content-type: application/json' -d '{"model":"coder","max_tokens":50,"tools":[{"name":"echo","input_schema":{"type":"object"}}],"messages":[{"role":"user","content":"use tool"},{"role":"assistant","content":[{"type":"tool_use","id":"call_1","name":"echo","input":{"text":"ping"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":"pong"}]}]}')
+check "anthropic tool_result" "$(echo "$AR" | j 'd["content"][0]["text"]')" "tool said: pong"
+check "anthropic count_tokens" "$(curl -s -XPOST $RT/v1/messages/count_tokens -H 'content-type: application/json' -d '{"model":"coder","messages":[{"role":"user","content":"one two three"}]}' | j 'd["input_tokens"]')" "3"
+check "anthropic error format" "$(curl -s -XPOST $RT/v1/messages -H 'content-type: application/json' -d '{"model":"nope","max_tokens":5,"messages":[]}' | j 'd["type"], d["error"]["type"]')" "error not_found_error"
 echo "  .. waiting for TTL unload"; sleep 10
 check "ttl unloaded" "$(curl -s $API/instances | j 'd[0]["state"]')" "stopped"
 # failing preset → OOM hint
@@ -82,5 +95,37 @@ check "export" "$(curl -s $API/presets/export | j 'len(d["presets"])')" "2"
 check "backup zip" "$(curl -s $API/backup | head -c 2)" "PK"
 check "ui served" "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8090/)" "200"
 check "version" "$(curl -s $API/version | j 'd["version"]')" "$(grep -m1 '^version' ../Cargo.toml | cut -d'"' -f2)"
+# game mode: a process from the list unloads models and blocks autoload
+curl -s -XPUT $API/settings -H 'content-type: application/json' -d '{"game_processes":["fakegame.exe"],"game_grace_secs":1}' >/dev/null
+curl -s -XPOST $RT/v1/chat/completions -d '{"model":"coder"}' >/dev/null
+curl -s -XPOST $API/instances/$PID1/pin -H 'content-type: application/json' -d '{"pinned":true}' >/dev/null
+cp "$(command -v sleep)" $T/fakegame; $T/fakegame 60 & GPID=$!
+sleep 7
+check "game mode on" "$(curl -s $API/gamemode | j 'd["active"], d["reason"], d["source"], len(d["unloaded"])')" "True fakegame list 1"
+check "game mode unloaded" "$(curl -s $API/instances | j '[i["state"] for i in d if i["preset_name"]=="Tiny"][0]')" "stopped"
+GE=$(curl -s -XPOST $RT/v1/chat/completions -d '{"model":"coder"}')
+check "game mode blocks autoload" "$(echo "$GE" | j '"игровой режим" in d["error"]["message"]')" "True"
+kill $GPID; sleep 6
+check "game mode off" "$(curl -s $API/gamemode | j 'd["active"]')" "False"
+check "game manual on" "$(curl -s -XPOST $API/gamemode/activate | j 'd["active"], d["source"]')" "True manual"
+check "game manual off" "$(curl -s -XPOST $API/gamemode/deactivate | j 'd["active"]')" "False"
+curl -s -XPUT $API/settings -H 'content-type: application/json' -d '{"game_mode":false}' >/dev/null
+# perplexity / KLD comparison of two quants (fake llama-perplexity)
+python3 $ROOT/tests/make_gguf.py $T/models/tiny-model-Q8_0.gguf >/dev/null; curl -s -XPOST $API/models/scan >/dev/null
+M8=$(curl -s $API/models | j '[m["id"] for m in d if "Q8_0" in m["file_name"]][0]')
+printf 'some text for perplexity\n%.0s' $(seq 1 50) > $T/text.txt
+PJ=$(curl -s -XPOST $API/perplexity -H 'content-type: application/json' -d "{\"model_ids\":[\"$MID\",\"$M8\"],\"base_model_id\":\"$M8\",\"backend_id\":\"$BID\",\"dataset\":\"$T/text.txt\",\"chunks\":10}" | j 'd["job_id"]')
+for i in $(seq 1 30); do [ "$(curl -s $API/jobs | PJ=$PJ j '[x["status"] for x in d if x["id"]==__import__("os").environ["PJ"]][0]')" = "running" ] || break; sleep 0.3; done
+PR=$(curl -s $API/perplexity)
+check "ppl runs" "$(echo "$PR" | j 'len(d)')" "2"
+check "ppl base" "$(echo "$PR" | j '[(r["quant"], r["is_base"], r["ppl"]) for r in d if r["is_base"]]')" "[('Q8_0', True, 6.0)]"
+check "ppl kld" "$(echo "$PR" | j '[(r["quant"], r["ppl"], r["kld"], r["same_top"]) for r in d if not r["is_base"]]')" "[('Q4_K_M', 6.32, 0.042, 94.2)]"
+# MCP: stdio server, list tools, call a tool
+MS=$(curl -s -XPOST $API/mcp/servers -H 'content-type: application/json' -d "{\"name\":\"echo\",\"transport\":\"stdio\",\"command\":\"$ROOT/tests/fake/mcp-echo\",\"enabled\":true}")
+MSID=$(echo "$MS" | j 'd["server"]["id"]')
+check "mcp connected" "$(echo "$MS" | j 'd["status"]["connected"], d["status"]["tools"], d["status"]["server_name"]')" "True 2 echo-test"
+check "mcp tools" "$(curl -s $API/mcp/tools | j '[t["function"] for t in d["tools"]]')" "['echo__echo', 'echo__add']"
+check "mcp call" "$(curl -s -XPOST $API/mcp/call -H 'content-type: application/json' -d "{\"server_id\":\"$MSID\",\"name\":\"add\",\"arguments\":{\"a\":2,\"b\":3}}" | j 'd["text"]')" "5"
+check "mcp bad server" "$(curl -s -XPOST $API/mcp/servers -H 'content-type: application/json' -d '{"name":"bad","command":"/nonexistent/mcp","enabled":true}' | j 'd["status"]["connected"]')" "False"
 curl -s -XPOST $API/instances/stop-all >/dev/null
 [ $fail = 0 ] && echo "E2E: ALL PASSED" || { echo "E2E: FAILURES"; tail -20 $T/out.log; exit 1; }

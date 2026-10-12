@@ -184,7 +184,7 @@
       const secs = (performance.now() - (firstTok || started)) / 1000
       if (timings?.predicted_per_second) m.stats = `${timings.predicted_n} tok · ${timings.predicted_per_second.toFixed(1)} tok/s${timings.prompt_per_second ? ' · pp ' + timings.prompt_per_second.toFixed(0) + ' tok/s' : ''}`
       else if (nTok) m.stats = `~${nTok} tok · ${(nTok / Math.max(secs, 0.01)).toFixed(1)} tok/s`
-      if (firstTok) m.stats = (m.stats || '') + ` · TTFT ${((firstTok - started) / 1000).toFixed(2)} s`
+      if (firstTok) m.stats = (m.stats ? m.stats + ' · ' : '') + `TTFT ${((firstTok - started) / 1000).toFixed(2)} s`
       busy = false
       ctrl = null
       persist()

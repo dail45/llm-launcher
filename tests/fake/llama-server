@@ -83,6 +83,12 @@ class H(BaseHTTPRequestHandler):
                     self.wfile.write(f"data: {json.dumps({'choices':[], 'usage': {'prompt_tokens': 12, 'completion_tokens': 4}})}\n\n".encode())
                     self.wfile.write(b"data: [DONE]\n\n"); self.wfile.flush(); return
                 return self._json(200, {"choices": [{"message": {"role": "assistant", "content": "", "tool_calls": [call]}, "finish_reason": "tool_calls"}], "usage": {"prompt_tokens": 12, "completion_tokens": 4}})
+            if tool_res and body.get("stream"):
+                self.send_response(200); self.send_header("Content-Type", "text/event-stream"); self.end_headers()
+                for w in ["Инструмент ответил: ", str(tool_res[-1].get("content"))]:
+                    self.wfile.write(f"data: {json.dumps({'choices':[{'delta':{'content':w}}]})}\n\n".encode()); self.wfile.flush(); time.sleep(0.05)
+                self.wfile.write(f"data: {json.dumps({'choices':[], 'timings': {'cache_n': 30, 'prompt_n': 8, 'predicted_n': 6, 'predicted_per_second': 41.0}})}\n\n".encode())
+                self.wfile.write(b"data: [DONE]\n\n"); self.wfile.flush(); return
             if tool_res:
                 return self._json(200, {"choices": [{"message": {"role": "assistant", "content": "tool said: " + str(tool_res[-1].get("content"))}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 20, "completion_tokens": 5}})
             if body.get("stream"):

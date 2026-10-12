@@ -70,10 +70,20 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .item(&sub)
         .item(&MenuItem::with_id(app, "stop_all", format!("Остановить все ({alive})"), alive > 0, None::<&str>)?)
         .item(&MenuItem::with_id(app, "open_browser", "Открыть в браузере", true, None::<&str>)?)
+        .item(&MenuItem::with_id(app, "game", game_label(), true, None::<&str>)?)
         .item(&PredefinedMenuItem::separator(app)?)
         .item(&MenuItem::with_id(app, "version", format!("Версия {}", lll_core::version_string()), false, None::<&str>)?)
         .item(&MenuItem::with_id(app, "quit", "Выход", true, None::<&str>)?)
         .build()
+}
+
+fn game_label() -> String {
+    let g = core().game.snapshot();
+    if g.active {
+        format!("🎮 Выключить игровой режим ({})", if g.reason == "manual" { "вручную".to_string() } else { g.reason })
+    } else {
+        "🎮 Включить игровой режим".to_string()
+    }
 }
 
 fn refresh_tray(app: &AppHandle) {
@@ -83,7 +93,8 @@ fn refresh_tray(app: &AppHandle) {
         }
         let n = core().pm.alive().len();
         let v = lll_core::VERSION;
-        let _ = t.set_tooltip(Some(if n == 0 { format!("Llama Launcher v{v}") } else { format!("Llama Launcher v{v} — запущено: {n}") }));
+        let g = if core().game.snapshot().active { " — 🎮 игровой режим" } else { "" };
+        let _ = t.set_tooltip(Some(if n == 0 { format!("Llama Launcher v{v}{g}") } else { format!("Llama Launcher v{v} — запущено: {n}{g}") }));
     }
 }
 
@@ -96,6 +107,16 @@ fn on_menu(app: &AppHandle, id: &str) {
             let _ = std::process::Command::new("cmd").args(["/C", "start", "", &url]).spawn();
             #[cfg(not(windows))]
             let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
+        }
+        "game" => {
+            tauri::async_runtime::spawn(async {
+                let c = core();
+                if c.game.snapshot().active {
+                    lll_core::gamemode::deactivate(c, true).await;
+                } else {
+                    lll_core::gamemode::activate(c, "manual", "manual").await;
+                }
+            });
         }
         "stop_all" => {
             tauri::async_runtime::spawn(async { core().pm.stop_all().await });
@@ -176,7 +197,7 @@ fn main() {
                 let mut last = std::time::Instant::now() - std::time::Duration::from_secs(10);
                 loop {
                     match rx.recv().await {
-                        Ok(Event::Instance { .. }) | Ok(Event::InstanceRemoved { .. }) => {
+                        Ok(Event::Instance { .. }) | Ok(Event::InstanceRemoved { .. }) | Ok(Event::Game { .. }) => {
                             let h = h2.clone();
                             let _ = h2.run_on_main_thread(move || refresh_tray(&h));
                         }

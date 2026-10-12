@@ -13,7 +13,8 @@ HELP = """----- common params -----
 -fa,   --flash-attn [on|off|auto]       set Flash Attention use (default: 'auto')
 --mmap, --no-mmap                       whether to memory-map model (default: enabled)
 -ctk,  --cache-type-k TYPE              KV cache data type for K
-                                        allowed values: f16, q8_0, q4_0, turbo3
+                                        allowed values: f16, q8_0, q4_0,
+                                        turbo2, turbo3, turbo4
                                         (default: f16)
 -ctv,  --cache-type-v TYPE              KV cache data type for V
                                         allowed values: f16, q8_0, q4_0, turbo3

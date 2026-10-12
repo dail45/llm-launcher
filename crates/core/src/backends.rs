@@ -42,8 +42,16 @@ fn bin_fingerprint(p: &Path) -> String {
     hex::encode(&h.finalize()[..12])
 }
 
+/// Bump when the --help parser changes so cached schemas are re-parsed.
+const SCHEMA_VERSION: u32 = 2;
+
 fn schema_cache_path(hash: &str) -> PathBuf {
-    paths::data_dir().join("schemas").join(format!("{hash}.json"))
+    paths::data_dir().join("schemas").join(format!("{hash}-v{SCHEMA_VERSION}.json"))
+}
+
+/// The cached schema was produced by an older parser (or is missing).
+pub fn schema_outdated(b: &Backend) -> bool {
+    b.bin_hash.as_ref().map(|h| !schema_cache_path(h).is_file()).unwrap_or(false)
 }
 
 pub fn load_schema(b: &Backend) -> Option<ParamSchema> {

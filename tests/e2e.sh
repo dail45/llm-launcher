@@ -15,6 +15,7 @@ B=$(curl -s -XPOST $API/backends -H 'content-type: application/json' -d "{\"name
 BID=$(echo "$B" | j 'd["id"]'); check "backend scanned" "$(echo "$B" | j 'd["version"]')" "6500"
 check "backend devices" "$(echo "$B" | j 'd["devices"][0]["id"]')" "CUDA0"
 check "schema has turbo3" "$(curl -s $API/backends/$BID/schema | j '"turbo3" in [c for p in d["params"] if p["id"]=="--cache-type-k" for c in p["choices"]]')" "True"
+check "wrapped allowed values" "$(curl -s $API/backends/$BID/schema | j "[c for p in d[\"params\"] if p[\"id\"]==\"--cache-type-k\" for c in p[\"choices\"]]")" "['f16', 'q8_0', 'q4_0', 'turbo2', 'turbo3', 'turbo4']"
 curl -s -XPOST $API/model-dirs -H 'content-type: application/json' -d "{\"path\":\"$T/models\",\"recursive\":true}" >/dev/null
 check "scan added" "$(curl -s -XPOST $API/models/scan | j 'd["added"]')" "1"
 MID=$(curl -s $API/models | j 'd[0]["id"]')

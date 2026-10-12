@@ -421,6 +421,16 @@ impl App {
     // ---------- background tasks
     pub fn spawn_background(self: &Arc<Self>) {
         crate::gamemode::spawn(self.clone());
+        // re-parse --help of builds whose cached schema is from an older parser
+        let app = self.clone();
+        tokio::spawn(async move {
+            let all: Vec<Backend> = app.store.list("backends").unwrap_or_default();
+            for b in all.into_iter().filter(backends::schema_outdated) {
+                if let Err(e) = app.rescan_backend(&b.id).await {
+                    tracing::warn!("rescan {}: {e:#}", b.name);
+                }
+            }
+        });
         // monitor
         let app = self.clone();
         tokio::spawn(async move {

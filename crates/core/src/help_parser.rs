@@ -59,7 +59,7 @@ impl ParamSchema {
 
 static RE_DEFAULT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\(default:\s*([^)]*)\)").unwrap());
 static RE_ENV: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\(env:\s*([A-Z0-9_]+)\)").unwrap());
-static RE_ALLOWED: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"allowed values:\s*([^\n(]+)").unwrap());
+static RE_ALLOWED: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"allowed values:\s*([^(]+)").unwrap());
 static RE_SECTION: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^-{3,}\s*(.+?)\s*-{3,}\s*$").unwrap());
 
 /// Params shown in "basic" mode.
@@ -269,7 +269,20 @@ fn build_param(flags: Vec<String>, hint: Option<String>, desc: String, section: 
     }
     if choices.is_empty() {
         if let Some(c) = RE_ALLOWED.captures(&desc) {
-            choices = c[1].split(',').map(|s| s.trim().trim_matches('\'').to_string()).filter(|s| !s.is_empty() && !s.contains(' ')).collect();
+            // the list may wrap onto the next lines ("q5_1,\n turbo2, turbo3"): keep lines while the previous one ends with a comma
+            let mut list = String::new();
+            for l in c[1].lines() {
+                let l = l.trim();
+                if l.is_empty() {
+                    break;
+                }
+                list.push_str(l);
+                list.push(' ');
+                if !l.ends_with(',') {
+                    break;
+                }
+            }
+            choices = list.split(',').map(|s| s.trim().trim_matches('\'').to_string()).filter(|s| !s.is_empty() && !s.contains(' ')).collect();
         }
     }
     let kind = match &hint {
@@ -470,6 +483,16 @@ mod tests {
         let temp = s.find("--temp").unwrap();
         assert_eq!(temp.kind, ParamKind::Float);
         assert_eq!(temp.group, "Сэмплинг");
+    }
+
+    #[test]
+    fn wrapped_allowed_values() {
+        let h = "-ctk,  --cache-type-k TYPE              KV cache data type for K\n                                        allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0,\n                                        q5_1,\n                                        turbo2, turbo3, turbo4\n                                        (default: f16)\n                                        (env: LLAMA_ARG_CACHE_TYPE_K)\n";
+        let s = parse_help(h);
+        let ctk = s.find("-ctk").unwrap();
+        assert_eq!(ctk.kind, ParamKind::Choice);
+        assert_eq!(ctk.choices, vec!["f32", "f16", "bf16", "q8_0", "q4_0", "q4_1", "iq4_nl", "q5_0", "q5_1", "turbo2", "turbo3", "turbo4"]);
+        assert_eq!(ctk.default.as_deref(), Some("f16"));
     }
 
     #[test]

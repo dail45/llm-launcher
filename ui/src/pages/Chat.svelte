@@ -1,3 +1,23 @@
+<script module lang="ts">
+  // Chat state is module-level: generation keeps streaming into it while the page is closed,
+  // and reopening the chat shows the live message.
+  type Call = { id: string; fn: string; args: string; server_id?: string; tool?: string; server?: string; status: 'pending' | 'running' | 'done' | 'error' | 'denied'; result?: string; open?: boolean }
+  type Msg = { role: string; content: string; reasoning?: string; reasoningTok?: number; images?: string[]; stats?: string; error?: string; thinkOpen?: boolean; thinking?: boolean; tool_calls?: Call[]; tool_call_id?: string }
+  type Conv = { id: string; title: string; model: string; system: string; messages: Msg[] }
+  let convs = $state<Conv[]>(JSON.parse(localStorage.getItem('lll_chats') || '[]'))
+  let cur = $state<Conv | null>(null)
+  let busy = $state(false)
+  let temp = $state(0.7)
+  let maxTokens = $state(0)
+  let ctrl: AbortController | null = null
+  let useTools = $state(localStorage.getItem('lll_chat_tools') === '1')
+  let tools = $state<any[]>([])
+  let toolErrors = $state<any[]>([])
+  let rounds = 0
+  // module-level so a stream started on a previous visit scrolls the current page
+  let box = $state<HTMLDivElement>()
+</script>
+
 <script lang="ts">
   import { onMount, tick } from 'svelte'
   import { api, raw } from '../lib/api'
@@ -5,27 +25,13 @@
   import { t } from '../lib/i18n.svelte'
   import { copy } from '../lib/fmt'
 
-  type Call = { id: string; fn: string; args: string; server_id?: string; tool?: string; server?: string; status: 'pending' | 'running' | 'done' | 'error' | 'denied'; result?: string; open?: boolean }
-  type Msg = { role: string; content: string; reasoning?: string; reasoningTok?: number; images?: string[]; stats?: string; error?: string; thinkOpen?: boolean; thinking?: boolean; tool_calls?: Call[]; tool_call_id?: string }
-  type Conv = { id: string; title: string; model: string; system: string; messages: Msg[] }
 
   let models = $state<any[]>([])
-  let convs = $state<Conv[]>(JSON.parse(localStorage.getItem('lll_chats') || '[]'))
-  let cur = $state<Conv | null>(null)
   let input = $state('')
   let images = $state<string[]>([])
-  let busy = $state(false)
-  let temp = $state(0.7)
-  let maxTokens = $state(0)
   let showSettings = $state(false)
-  let ctrl: AbortController | null = null
-  let box = $state<HTMLDivElement>()
   let fileEl = $state<HTMLInputElement>()
-  let useTools = $state(localStorage.getItem('lll_chat_tools') === '1')
-  let tools = $state<any[]>([])
-  let toolErrors = $state<any[]>([])
   let toolsLoading = $state(false)
-  let rounds = 0
 
   async function loadTools() {
     toolsLoading = true
@@ -39,15 +45,17 @@
 
   onMount(async () => {
     try { models = (await api.get('/api/router/models')).data } catch (e) { app.err(e) }
-    cur = convs[0] || newConv()
+    if (!cur || !convs.includes(cur)) cur = convs[0] || newConv()
     if (useTools) loadTools()
+    scroll(true)
   })
   function newConv(): Conv {
     const c: Conv = { id: Math.random().toString(36).slice(2), title: t('Новый чат'), model: cur?.model || models.find((m) => m.meta?.loaded)?.id || models[0]?.id || '', system: '', messages: [] }
     convs.unshift(c)
-    cur = c
+    // use the proxied element from the list: assigning `c` itself would create a second, diverging proxy
+    cur = convs[0]
     persist()
-    return c
+    return convs[0]
   }
   function persist() {
     localStorage.setItem('lll_chats', JSON.stringify(convs.slice(0, 50).map((c) => ({ ...c, messages: c.messages.map((m) => ({ ...m, thinking: false })) }))))
@@ -57,9 +65,9 @@
     cur = convs[0] || newConv()
     persist()
   }
-  async function scroll() {
+  async function scroll(force = false) {
     await tick()
-    if (box && box.scrollHeight - box.scrollTop - box.clientHeight < 200) box.scrollTop = box.scrollHeight
+    if (box && box.isConnected && (force || box.scrollHeight - box.scrollTop - box.clientHeight < 200)) box.scrollTop = box.scrollHeight
   }
   async function pickImages(e: Event) {
     for (const f of Array.from((e.target as HTMLInputElement).files || [])) {

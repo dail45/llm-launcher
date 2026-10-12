@@ -100,13 +100,13 @@
     const bits: Record<string, number> = {}
     for (const l of cacheText.split('\n')) { const [k, v] = l.split('='); if (k?.trim() && v && !isNaN(+v)) bits[k.trim()] = +v }
     s.custom_cache_bits = bits
+    try {
     s.game_processes = lines(gameText)
     s.game_ignore = lines(ignoreText)
-    const lines = (x: any) => (Array.isArray(x) ? x : String(x || '').split(/[\n,]/)).map((v: string) => v.trim()).filter(Boolean)
-    s.allowed_subnets = lines(s.allowed_subnets)
-    s.trusted_proxies = lines(s.trusted_proxies)
-    s.cors_origins = lines(s.cors_origins)
-    try {
+    const list = (x: any) => (Array.isArray(x) ? x : String(x || '').split(/[\n,]/)).map((v: string) => v.trim()).filter(Boolean)
+    s.allowed_subnets = list(s.allowed_subnets)
+    s.trusted_proxies = list(s.trusted_proxies)
+    s.cors_origins = list(s.cors_origins)
       const r = await api.put('/api/settings', s)
       if (s.language !== lang.v) setLang(s.language)
       app.toast('success', t('Настройки сохранены'), r.restarting ? t('Сетевые параметры изменены — сервер перезапускается. Если поменяли порт UI — откройте новый адрес.') : '')

@@ -285,6 +285,12 @@ pub struct Settings {
     pub game_restore: bool,
     /// seconds without a game before the mode turns off
     pub game_grace_secs: u64,
+    /// optional HTTPS listener for the UI/API (needed for installing the PWA on phones)
+    pub https_enabled: bool,
+    pub https_port: u16,
+    /// PEM certificate chain and private key
+    pub https_cert: String,
+    pub https_key: String,
 }
 
 impl Default for Settings {
@@ -337,6 +343,10 @@ impl Default for Settings {
             game_block_loads: true,
             game_restore: false,
             game_grace_secs: 20,
+            https_enabled: false,
+            https_port: 8443,
+            https_cert: String::new(),
+            https_key: String::new(),
         }
     }
 }

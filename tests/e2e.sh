@@ -127,5 +127,15 @@ check "mcp connected" "$(echo "$MS" | j 'd["status"]["connected"], d["status"]["
 check "mcp tools" "$(curl -s $API/mcp/tools | j '[t["function"] for t in d["tools"]]')" "['echo__echo', 'echo__add']"
 check "mcp call" "$(curl -s -XPOST $API/mcp/call -H 'content-type: application/json' -d "{\"server_id\":\"$MSID\",\"name\":\"add\",\"arguments\":{\"a\":2,\"b\":3}}" | j 'd["text"]')" "5"
 check "mcp bad server" "$(curl -s -XPOST $API/mcp/servers -H 'content-type: application/json' -d '{"name":"bad","command":"/nonexistent/mcp","enabled":true}' | j 'd["status"]["connected"]')" "False"
+# PWA files + optional HTTPS listener
+check "manifest" "$(curl -s -o /dev/null -w '%{content_type}' http://127.0.0.1:8090/manifest.webmanifest)" "application/manifest+json"
+check "sw no-cache" "$(curl -sI http://127.0.0.1:8090/sw.js | grep -ci 'cache-control: no-cache')" "1"
+openssl req -x509 -newkey rsa:2048 -nodes -keyout $T/k.pem -out $T/c.pem -days 1 -subj /CN=localhost >/dev/null 2>&1
+curl -s -XPUT $API/settings -H 'content-type: application/json' -d "{\"https_enabled\":true,\"https_port\":18443,\"https_cert\":\"$T/c.pem\",\"https_key\":\"$T/k.pem\"}" >/dev/null
+for i in $(seq 1 30); do curl -sk https://127.0.0.1:18443/api/version >/dev/null && break; sleep 0.2; done
+check "https" "$(curl -sk https://127.0.0.1:18443/api/version | j 'd["version"] != ""')" "True"
+check "https in status" "$(curl -s $API/status | j 'd["https_port"]')" "18443"
+curl -s -XPUT $API/settings -H 'content-type: application/json' -d '{"https_enabled":false}' >/dev/null
+sleep 1.5
 curl -s -XPOST $API/instances/stop-all >/dev/null
 [ $fail = 0 ] && echo "E2E: ALL PASSED" || { echo "E2E: FAILURES"; tail -20 $T/out.log; exit 1; }

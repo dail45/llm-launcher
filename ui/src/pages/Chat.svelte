@@ -225,6 +225,8 @@
     if (++rounds > 10) return app.toast('error', t('Слишком много вызовов инструментов подряд'))
     await generate(c)
   }
+  let showList = $state(false)
+  const touch = matchMedia('(pointer: coarse)').matches
   function stop() {
     ctrl?.abort()
   }
@@ -233,16 +235,18 @@
     return parts.map((p, i) => (i % 2 ? { code: true, text: p.replace(/^[\w+-]*\n/, '') } : { code: false, text: p }))
   }
   function key(e: KeyboardEvent) {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
+    // on touch keyboards Enter inserts a new line; sending is done with the button
+    if (e.key === 'Enter' && !e.shiftKey && !touch) { e.preventDefault(); send() }
   }
 </script>
 
 <div class="chat">
-  <div class="list col">
-    <button class="primary" onclick={newConv}>+ {t('Новый чат')}</button>
+  {#if showList}<button class="scrim" aria-label="close" onclick={() => (showList = false)}></button>{/if}
+  <div class="list col" class:open={showList}>
+    <button class="primary" onclick={() => { newConv(); showList = false }}>+ {t('Новый чат')}</button>
     {#each convs as c (c.id)}
       <div class="row nw ci" class:on={cur?.id === c.id}>
-        <button class="ghost" style="flex:1;justify-content:flex-start;overflow:hidden" onclick={() => (cur = c)}><span class="ell">{c.title}</span></button>
+        <button class="ghost" style="flex:1;justify-content:flex-start;overflow:hidden" onclick={() => { cur = c; showList = false }}><span class="ell">{c.title}</span></button>
         <button class="ghost sm" onclick={() => delConv(c)}>✕</button>
       </div>
     {/each}
@@ -250,14 +254,15 @@
   {#if cur}
     <div class="main">
       <div class="row top">
-        <select bind:value={cur.model} onchange={persist} style="max-width:320px">
+        <button class="sm mob" title={t('Чаты')} onclick={() => (showList = true)}><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="3" width="14" height="1.6" rx=".8"/><rect x="1" y="7.2" width="14" height="1.6" rx=".8"/><rect x="1" y="11.4" width="14" height="1.6" rx=".8"/></svg> <span class="badge">{convs.length}</span></button>
+        <select bind:value={cur.model} onchange={persist} class="msel">
           {#each models as m}<option value={m.id}>{m.meta?.loaded ? '● ' : ''}{m.id}</option>{/each}
         </select>
-        <span class="small dim">{models.find((m) => m.id === cur?.model)?.meta?.loaded ? t('загружена') : t('загрузится при первом запросе')}</span>
+        <span class="small dim desk">{models.find((m) => m.id === cur?.model)?.meta?.loaded ? t('загружена') : t('загрузится при первом запросе')}</span>
         <span class="sp"></span>
-        <label class="switch small" title={t('Инструменты MCP-серверов (Настройки → MCP)')}><input type="checkbox" checked={useTools} onchange={(e) => setTools((e.target as HTMLInputElement).checked)} /> 🔧 {t('Инструменты')}
+        <label class="switch small" title={t('Инструменты MCP-серверов (Настройки → MCP)')}><input type="checkbox" checked={useTools} onchange={(e) => setTools((e.target as HTMLInputElement).checked)} /> 🔧 <span class="desk">{t('Инструменты')}</span>
           {#if useTools}{#if toolsLoading}<span class="spin"></span>{:else}<span class="badge {tools.length ? 'ok' : ''}">{tools.length}</span>{/if}{/if}</label>
-        <button class="sm" onclick={() => (showSettings = !showSettings)}>⚙ {t('Параметры')}</button>
+        <button class="sm" onclick={() => (showSettings = !showSettings)}>⚙ <span class="desk">{t('Параметры')}</span></button>
       </div>
       {#if useTools && !toolsLoading && (toolErrors.length || !tools.length)}
         <div class="alert warn small" style="margin-bottom:8px">
@@ -324,15 +329,17 @@
       <div class="row nw inp">
         <button class="ghost" title={t('Прикрепить изображение (нужен mmproj)')} onclick={() => fileEl?.click()}>🖼</button>
         <input type="file" accept="image/*" multiple hidden bind:this={fileEl} onchange={pickImages} />
-        <textarea rows="2" bind:value={input} onkeydown={key} placeholder={t('Сообщение… (Enter — отправить, Shift+Enter — новая строка)')} style="font-family:inherit;font-size:14px"></textarea>
-        {#if busy}<button class="danger" onclick={stop}>■ {t('Стоп')}</button>{:else}<button class="primary" onclick={send}>{t('Отправить')}</button>{/if}
+        <textarea rows="2" bind:value={input} onkeydown={key} placeholder={touch ? t('Сообщение…') : t('Сообщение… (Enter — отправить, Shift+Enter — новая строка)')} style="font-family:inherit;font-size:14px"></textarea>
+        {#if busy}<button class="danger" onclick={stop}>■ {t('Стоп')}</button>{:else}<button class="primary" onclick={send} title={t('Отправить')}><span class="desk">{t('Отправить')}</span><span class="mob"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M3.4 20.4 21 12 3.4 3.6 3.4 10l12.6 2-12.6 2z"/></svg></span></button>{/if}
       </div>
     </div>
   {/if}
 </div>
 
 <style>
-  .chat { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 14px; height: calc(100vh - 62px); }
+  .chat { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 14px; height: var(--avail-h, calc(100vh - 62px)); }
+  .msel { max-width: 320px; }
+  .mob, .scrim { display: none; }
   .list { overflow: auto; gap: 2px; }
   .ci.on { background: var(--bg4); border-radius: 6px; }
   .main { display: flex; flex-direction: column; min-height: 0; }
@@ -353,5 +360,21 @@
   .call .hdr { width: 100%; justify-content: flex-start; gap: 6px; padding: 2px 0; }
   .call pre { max-height: 240px; overflow: auto; margin: 4px 0; white-space: pre-wrap; }
   .call .res { color: var(--fg2); }
-  @media (max-width: 800px) { .chat { grid-template-columns: 1fr; } .list { display: none; } }
+  @media (max-width: 800px) {
+    .chat { grid-template-columns: 1fr; }
+    .list { display: none; }
+    .list.open { display: flex; position: fixed; z-index: 40; left: 0; top: 0; bottom: 0; width: min(300px, 82vw); background: var(--bg2); border-right: 1px solid var(--line); padding: calc(12px + env(safe-area-inset-top)) 10px 12px; box-shadow: 0 0 40px rgba(0, 0, 0, .5); }
+    .scrim { display: block; position: fixed; inset: 0; z-index: 39; background: rgba(0, 0, 0, .45); border: 0; border-radius: 0; padding: 0; }
+    .mob { display: inline-flex; }
+    .desk { display: none; }
+    .msel { flex: 1; min-width: 0; max-width: none; }
+    .top { flex-wrap: nowrap; gap: 6px; }
+    .top .sp { display: none; }
+    .msg { max-width: 100%; padding: 8px 11px; }
+    .msg.user { margin-left: 28px; }
+    .msgs { gap: 9px; padding: 2px 0 10px; }
+    .call .hdr .mono { display: none; }
+    .inp { gap: 4px; }
+    .inp textarea { font-size: 16px !important; }
+  }
 </style>

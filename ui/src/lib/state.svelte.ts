@@ -6,6 +6,8 @@ export type Toast = { id: number; level: string; title: string; message: string 
 class AppState {
   ready = $state(false)
   needLogin = $state(false)
+  /** launcher unreachable (PWA opened outside the LAN, PC asleep, …) */
+  offline = $state(false)
   auth = $state<any>({})
   status = $state<any>({})
   system = $state<any>({ gpus: [] })
@@ -47,8 +49,15 @@ class AppState {
   async boot() {
     try {
       this.auth = await api.get('/api/auth/status')
+      this.offline = false
     } catch (e) {
       this.auth = {}
+      if (e instanceof TypeError) {
+        // network error, not an auth problem
+        this.offline = true
+        this.ready = true
+        return
+      }
     }
     if (!this.auth.authenticated) {
       this.needLogin = true

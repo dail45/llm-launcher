@@ -15,5 +15,8 @@
     "svelte-check": "^4.3.0",
     "typescript": "^5.9.2",
     "vite": "^7.1.0"
+  },
+  "dependencies": {
+    "qrcode-generator": "^1.5.2"
   }
 }

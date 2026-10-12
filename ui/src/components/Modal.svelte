@@ -25,5 +25,10 @@
   .m { background: var(--bg2); border: 1px solid var(--line); border-radius: 12px; max-width: 100%; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5); display: flex; flex-direction: column; max-height: 88vh; }
   .hd { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line); }
   .bd { padding: 16px; overflow: auto; }
+  @media (max-width: 760px) {
+    .ov { padding: 0; align-items: flex-end; }
+    .m { width: 100% !important; max-height: 92dvh; border-radius: 14px 14px 0 0; padding-bottom: env(safe-area-inset-bottom); }
+    .bd { padding: 12px; }
+  }
   .ft { padding: 12px 16px; border-top: 1px solid var(--line); display: flex; justify-content: flex-end; gap: 8px; }
 </style>

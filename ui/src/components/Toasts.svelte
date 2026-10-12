@@ -19,4 +19,5 @@
   .t.success { border-left-color: var(--ok); }
   .t.error { border-left-color: var(--bad); }
   .t.warning, .t.warn { border-left-color: var(--warn); }
+  @media (max-width: 760px) { .ts { left: 10px; right: 10px; max-width: none; bottom: calc(var(--tab-h, 58px) + env(safe-area-inset-bottom) + 8px); } }
 </style>

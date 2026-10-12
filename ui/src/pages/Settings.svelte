@@ -6,6 +6,7 @@
   import { date, copy, bytes } from '../lib/fmt'
   import { confirmDlg } from '../lib/dialog.svelte'
   import Modal from '../components/Modal.svelte'
+  import Qr from '../components/Qr.svelte'
 
   let tab = $state('general')
   let s = $state<any>(null)
@@ -106,6 +107,7 @@
       app.toast('success', t('Настройки сохранены'), r.restarting ? t('Сетевые параметры изменены — сервер перезапускается. Если поменяли порт UI — откройте новый адрес.') : '')
       await load()
       app.status = await api.get('/api/status')
+      if (r.restarting) setTimeout(async () => { try { app.status = await api.get('/api/status') } catch {} }, 2500)
     } catch (e) { app.err(e) }
   }
   async function setPw() {
@@ -181,7 +183,7 @@
     </div>
   {:else if tab === 'network'}
     <div class="card col">
-      <div class="alert">{t('По умолчанию всё слушает только 127.0.0.1. Чтобы открыть доступ из локальной сети, укажите 0.0.0.0 (или IP адаптера) и задайте пароль во вкладке «Безопасность». HTTPS не встроен — при необходимости поставьте перед лаунчером Caddy или nginx и добавьте его адрес в доверенные прокси.')}</div>
+      <div class="alert">{t('По умолчанию всё слушает только 127.0.0.1. Чтобы открыть доступ из локальной сети, укажите 0.0.0.0 (или IP адаптера) и задайте пароль во вкладке «Безопасность».')}</div>
       <div class="grid g2">
         <label class="field"><span>{t('Интерфейс: адрес')}</span><input bind:value={s.ui_bind} /></label>
         <label class="field"><span>{t('Интерфейс: порт')}</span><input type="number" bind:value={s.ui_port} /></label>
@@ -191,6 +193,16 @@
         <label class="field"><span>{t('по')}</span><input type="number" bind:value={s.internal_port_end} /></label>
       </div>
       {#if app.status.lan_ip}<div class="small muted">{t('IP этого компьютера в сети')}: <code>{app.status.lan_ip}</code></div>{/if}
+      <h3 style="margin:6px 0 0">🔒 HTTPS</h3>
+      <label class="switch"><input type="checkbox" bind:checked={s.https_enabled} /> {t('Дополнительно слушать HTTPS')}</label>
+      {#if s.https_enabled}
+        <div class="grid g3">
+          <label class="field"><span>{t('Порт HTTPS')}</span><input type="number" bind:value={s.https_port} /></label>
+          <label class="field"><span>{t('Сертификат (PEM, полный путь)')}</span><input bind:value={s.https_cert} placeholder="C:\certs\pc.crt" /></label>
+          <label class="field"><span>{t('Закрытый ключ (PEM, полный путь)')}</span><input bind:value={s.https_key} placeholder="C:\certs\pc.key" /></label>
+        </div>
+      {/if}
+      <div class="small dim">{t('Нужен, чтобы установить веб-интерфейс на телефон как приложение (PWA): браузеры разрешают это только для HTTPS с доверенным сертификатом. Проще всего — Tailscale (команда «tailscale cert» выдаёт настоящий сертификат и заодно даёт доступ вне дома) или mkcert (корневой сертификат нужно установить на телефон). Обычный HTTP продолжает работать на основном порту.')}</div>
       <label class="chk"><input type="checkbox" bind:checked={s.local_no_auth} /> {t('Не спрашивать пароль на этом компьютере (127.0.0.1)')}</label>
       <div class="small muted">{keys.length ? t('Роутер требует API-ключ (есть ключи во вкладке «Безопасность»).') : t('API-ключей нет — роутер OpenAI доступен без токена. Создайте ключ во вкладке «Безопасность», и роутер начнёт его требовать.')}</div>
       <label class="chk"><input type="checkbox" bind:checked={s.log_request_bodies} /> {t('Логировать тела запросов (для отладки)')}</label>
@@ -199,6 +211,27 @@
         <label class="field"><span>{t('Доверенные прокси')}</span><textarea rows="3" value={asText(s.trusted_proxies)} oninput={(e) => (s.trusted_proxies = e.currentTarget.value)} placeholder="127.0.0.1"></textarea><span class="hint">{t('Их X-Forwarded-For считается адресом клиента')}</span></label>
         <label class="field"><span>{t('Доп. CORS origins')}</span><textarea rows="3" value={asText(s.cors_origins)} oninput={(e) => (s.cors_origins = e.currentTarget.value)} placeholder="http://192.168.1.10:3000"></textarea></label>
       </div>
+    </div>
+    <div class="card col" style="margin-top:12px">
+      <h3 style="margin:0">📱 {t('Телефон')}</h3>
+      {#if !app.status.lan_ip || app.status.ui_bind === '127.0.0.1' || app.status.ui_bind === 'localhost'}
+        <div class="alert warn small">{t('Сейчас интерфейс доступен только с этого компьютера. Укажите адрес 0.0.0.0 выше, задайте пароль и сохраните.')}</div>
+      {:else}
+        {@const urls = [
+          ...(app.status.https_port ? [`https://${app.status.lan_ip}:${app.status.https_port}/`] : []),
+          `http://${app.status.lan_ip}:${app.status.ui_port}/`,
+        ]}
+        {#if !app.auth.has_password}<div class="alert warn small">{t('Пароль не задан — с телефона войти не получится (вкладка «Безопасность»).')}</div>{/if}
+        <div class="row" style="align-items:flex-start;gap:16px">
+          <Qr text={urls[0]} />
+          <div class="col small" style="flex:1;min-width:220px">
+            <div>{t('Отсканируйте код камерой телефона (телефон должен быть в той же Wi-Fi сети) или откройте адрес:')}</div>
+            {#each urls as u}<div class="row nw"><code class="ell">{u}</code><button class="ghost sm" onclick={() => copy(u)}>📋</button></div>{/each}
+            <div class="muted">{t('Установка как приложения: Android/Chrome — «Установить приложение» в меню «Ещё» или в меню браузера (нужен HTTPS); iPhone/Safari — «Поделиться» → «На экран „Домой“» (работает и по HTTP).')}</div>
+            {#if s.https_enabled && !app.status.https_port}<div class="alert warn">{t('HTTPS включён, но не запущен — сохраните настройки или проверьте пути к сертификату.')}</div>{/if}
+          </div>
+        </div>
+      {/if}
     </div>
   {:else if tab === 'security'}
     <div class="grid g2">

@@ -11,6 +11,8 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 struct Running {
     stop: Vec<oneshot::Sender<()>>,
 }
+/// port of the running HTTPS listener (0 = off)
+pub static HTTPS_PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
 static RUNNING: OnceLock<Mutex<Option<Running>>> = OnceLock::new();
 
 fn cors(app: &AppRef) -> CorsLayer {
@@ -60,9 +62,49 @@ pub async fn start(app: AppRef) -> Result<()> {
             tracing::error!("router server: {e}");
         }
     });
+    let mut stop = vec![tx1, tx2];
+    HTTPS_PORT.store(0, std::sync::atomic::Ordering::Relaxed);
+    if s.https_enabled {
+        match start_https(&app).await {
+            Ok(tx) => stop.push(tx),
+            Err(e) => {
+                tracing::error!("https: {e:#}");
+                app.bus.toast("error", "HTTPS не запущен", format!("{e:#}"));
+            }
+        }
+    }
     tracing::info!("UI/API on http://{}:{}, router on http://{}:{}", s.ui_bind, s.ui_port, s.router_bind, s.router_port);
-    *RUNNING.get_or_init(Default::default).lock() = Some(Running { stop: vec![tx1, tx2] });
+    *RUNNING.get_or_init(Default::default).lock() = Some(Running { stop });
     Ok(())
+}
+
+/// Optional HTTPS listener for the same UI/API (service workers / PWA install need a secure origin).
+async fn start_https(app: &AppRef) -> Result<oneshot::Sender<()>> {
+    let s = app.settings();
+    anyhow::ensure!(!s.https_cert.trim().is_empty() && !s.https_key.trim().is_empty(), "не указаны файлы сертификата и ключа");
+    anyhow::ensure!(s.https_port != s.ui_port && s.https_port != s.router_port, "порт HTTPS совпадает с другим портом");
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let cfg = axum_server::tls_rustls::RustlsConfig::from_pem_file(s.https_cert.trim(), s.https_key.trim())
+        .await
+        .context("не удалось прочитать сертификат/ключ (нужны PEM-файлы)")?;
+    let l = bind(&s.ui_bind, s.https_port).await?.into_std()?;
+    let api = crate::api::router(app.clone()).layer(cors(app));
+    let handle = axum_server::Handle::new();
+    let h2 = handle.clone();
+    let (tx, rx) = oneshot::channel::<()>();
+    tokio::spawn(async move {
+        let _ = rx.await;
+        h2.graceful_shutdown(Some(std::time::Duration::from_secs(1)));
+    });
+    let srv = axum_server::from_tcp_rustls(l, cfg)?.handle(handle);
+    tokio::spawn(async move {
+        if let Err(e) = srv.serve(api.into_make_service_with_connect_info::<SocketAddr>()).await {
+            tracing::error!("https server: {e}");
+        }
+    });
+    HTTPS_PORT.store(s.https_port, std::sync::atomic::Ordering::Relaxed);
+    tracing::info!("UI/API also on https://{}:{}", s.ui_bind, s.https_port);
+    Ok(tx)
 }
 
 pub async fn restart(app: AppRef) -> Result<()> {

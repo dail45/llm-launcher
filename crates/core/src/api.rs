@@ -151,8 +151,8 @@ async fn static_ui(req: Request) -> Response {
         },
     };
     let file = if file.is_empty() { "index.html" } else { file };
-    let mime = mime_guess::from_path(file).first_or_octet_stream();
-    let cache = if file == "index.html" { "no-cache" } else { "public, max-age=31536000, immutable" };
+    let mime = if file.ends_with(".webmanifest") { "application/manifest+json".parse().unwrap() } else { mime_guess::from_path(file).first_or_octet_stream() };
+    let cache = if file.starts_with("assets/") { "public, max-age=31536000, immutable" } else { "no-cache" };
     ([(header::CONTENT_TYPE, mime.as_ref().to_string()), (header::CACHE_CONTROL, cache.to_string())], data.data.into_owned()).into_response()
 }
 
@@ -283,6 +283,7 @@ async fn status(State(app): State<AppRef>, _a: Admin) -> R<J> {
         "build_date": crate::BUILD_DATE,
         "data_dir": crate::paths::data_dir(),
         "ui_port": s.ui_port, "router_port": s.router_port, "ui_bind": s.ui_bind, "router_bind": s.router_bind,
+        "https_port": match crate::server::HTTPS_PORT.load(std::sync::atomic::Ordering::Relaxed) { 0 => None, p => Some(p) },
         "lan_ip": lan,
         "os": std::env::consts::OS,
         "counts": {
@@ -357,7 +358,14 @@ async fn put_settings(State(app): State<AppRef>, _a: Admin, Json(v): Json<Value>
     if new.internal_port_start >= new.internal_port_end {
         return Err(ApiError::bad("некорректный диапазон портов"));
     }
-    let restart = new.ui_bind != old.ui_bind || new.ui_port != old.ui_port || new.router_bind != old.router_bind || new.router_port != old.router_port;
+    let restart = new.ui_bind != old.ui_bind
+        || new.ui_port != old.ui_port
+        || new.router_bind != old.router_bind
+        || new.router_port != old.router_port
+        || new.https_enabled != old.https_enabled
+        || new.https_port != old.https_port
+        || new.https_cert != old.https_cert
+        || new.https_key != old.https_key;
     app.save_settings(new)?;
     if restart {
         let a = app.clone();

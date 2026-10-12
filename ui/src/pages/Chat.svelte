@@ -6,7 +6,7 @@
   import { copy } from '../lib/fmt'
 
   type Call = { id: string; fn: string; args: string; server_id?: string; tool?: string; server?: string; status: 'pending' | 'running' | 'done' | 'error' | 'denied'; result?: string; open?: boolean }
-  type Msg = { role: string; content: string; reasoning?: string; images?: string[]; stats?: string; error?: string; thinkOpen?: boolean; thinking?: boolean; tool_calls?: Call[]; tool_call_id?: string }
+  type Msg = { role: string; content: string; reasoning?: string; reasoningTok?: number; images?: string[]; stats?: string; error?: string; thinkOpen?: boolean; thinking?: boolean; tool_calls?: Call[]; tool_call_id?: string }
   type Conv = { id: string; title: string; model: string; system: string; messages: Msg[] }
 
   let models = $state<any[]>([])
@@ -102,7 +102,7 @@
 
   async function generate(c: Conv) {
     busy = true
-    c.messages.push({ role: 'assistant', content: '', reasoning: '', thinking: true, thinkOpen: true })
+    c.messages.push({ role: 'assistant', content: '', reasoning: '', reasoningTok: 0, thinking: true, thinkOpen: true })
     const m = c.messages[c.messages.length - 1]
     scroll()
     ctrl = new AbortController()
@@ -157,12 +157,13 @@
             if (m.thinking) { m.thinking = false; m.thinkOpen = false }
           }
           const rc = d.reasoning_content ?? d.reasoning
-          if (rc) { m.reasoning += rc; nTok++; if (!firstTok) firstTok = performance.now() }
+          if (rc) { m.reasoning += rc; m.reasoningTok = (m.reasoningTok || 0) + 1; nTok++; if (!firstTok) firstTok = performance.now() }
           // … or inline <think> tags inside content
           if (d.content) {
             if (!firstTok) firstTok = performance.now()
             nTok++
             let s: string = d.content
+            const before = m.reasoning!.length
             while (s.length) {
               if (inThink) {
                 const e = s.indexOf('</think>')
@@ -172,6 +173,8 @@
                 if (b < 0) { m.content += s; s = '' } else { m.content += s.slice(0, b); s = s.slice(b + 7); inThink = true }
               }
             }
+            // llama-server streams one token per chunk
+            if (m.reasoning!.length > before) m.reasoningTok = (m.reasoningTok || 0) + 1
             if (m.content.trim() && m.thinking) { m.thinking = false; m.thinkOpen = false }
           }
           scroll()
@@ -287,7 +290,7 @@
             {#if m.images?.length}<div class="row">{#each m.images as u}<img src={u} alt="" class="thumb" />{/each}</div>{/if}
             {#if m.reasoning}
               <details class="think" bind:open={m.thinkOpen}>
-                <summary class="small">{#if m.thinking}<span class="spin"></span> {t('Думает…')}{:else}💭 {t('Размышления')}{/if} <span class="dim">({m.reasoning.length} {t('симв.')})</span></summary>
+                <summary class="small">{#if m.thinking}<span class="spin"></span> {t('Думает…')}{:else}💭 {t('Размышления')}{/if} <span class="dim">({m.reasoningTok ? m.reasoningTok : '≈' + Math.round(m.reasoning.length / 4)} {t('ток.')})</span></summary>
                 <div class="tt">{m.reasoning}</div>
               </details>
             {:else if m.thinking && !m.content}

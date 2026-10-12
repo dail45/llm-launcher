@@ -518,6 +518,7 @@ export const EN: Record<string, string> = {
  "пусто": "empty",
  "свободно": "free",
  "симв.": "chars",
+ "ток.": "tok",
  "скачано": "downloaded",
  "слоёв": "layers",
  "создайте пресет": "create a preset",

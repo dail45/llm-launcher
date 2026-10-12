@@ -12,6 +12,7 @@ class AppState {
   instances = $state<Record<string, any>>({})
   jobs = $state<Record<string, any>>({})
   downloads = $state<Record<string, any>>({})
+  game = $state<any>({})
   toasts = $state<Toast[]>([])
   logListeners = new Set<(e: any) => void>()
   route = $state(location.hash.slice(1) || '/')
@@ -61,12 +62,14 @@ class AppState {
 
   async load() {
     try {
-      const [st, inst, jobs, dls] = await Promise.all([
+      const [st, inst, jobs, dls, game] = await Promise.all([
         api.get('/api/status'),
         api.get('/api/instances'),
         api.get('/api/jobs'),
         api.get('/api/downloads'),
+        api.get('/api/gamemode').catch(() => ({})),
       ])
+      this.game = game
       this.status = st
       this.instances = Object.fromEntries(inst.map((i: any) => [i.id, i]))
       this.jobs = Object.fromEntries(jobs.map((j: any) => [j.id, j]))
@@ -103,6 +106,7 @@ class AppState {
         case 'job': this.jobs[e.info.id] = e.info; break
         case 'download': this.downloads[e.info.id] = e.info; break
         case 'toast': this.toast(e.level, e.title, e.message); break
+        case 'game': this.game = e.info; break
         case 'log': for (const f of this.logListeners) f(e); break
       }
     }

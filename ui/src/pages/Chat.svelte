@@ -5,7 +5,8 @@
   import { t } from '../lib/i18n.svelte'
   import { copy } from '../lib/fmt'
 
-  type Msg = { role: string; content: string; reasoning?: string; images?: string[]; stats?: string; error?: string; thinkOpen?: boolean; thinking?: boolean }
+  type Call = { id: string; fn: string; args: string; server_id?: string; tool?: string; server?: string; status: 'pending' | 'running' | 'done' | 'error' | 'denied'; result?: string; open?: boolean }
+  type Msg = { role: string; content: string; reasoning?: string; images?: string[]; stats?: string; error?: string; thinkOpen?: boolean; thinking?: boolean; tool_calls?: Call[]; tool_call_id?: string }
   type Conv = { id: string; title: string; model: string; system: string; messages: Msg[] }
 
   let models = $state<any[]>([])
@@ -20,10 +21,26 @@
   let ctrl: AbortController | null = null
   let box = $state<HTMLDivElement>()
   let fileEl = $state<HTMLInputElement>()
+  let useTools = $state(localStorage.getItem('lll_chat_tools') === '1')
+  let tools = $state<any[]>([])
+  let toolErrors = $state<any[]>([])
+  let toolsLoading = $state(false)
+  let rounds = 0
+
+  async function loadTools() {
+    toolsLoading = true
+    try { const r = await api.get('/api/mcp/tools'); tools = r.tools; toolErrors = r.errors } catch (e) { app.err(e) } finally { toolsLoading = false }
+  }
+  function setTools(on: boolean) {
+    useTools = on
+    localStorage.setItem('lll_chat_tools', on ? '1' : '0')
+    if (on) loadTools()
+  }
 
   onMount(async () => {
     try { models = (await api.get('/api/router/models')).data } catch (e) { app.err(e) }
     cur = convs[0] || newConv()
+    if (useTools) loadTools()
   })
   function newConv(): Conv {
     const c: Conv = { id: Math.random().toString(36).slice(2), title: t('Новый чат'), model: cur?.model || models.find((m) => m.meta?.loaded)?.id || models[0]?.id || '', system: '', messages: [] }
@@ -56,7 +73,9 @@
     const out: any[] = []
     if (c.system.trim()) out.push({ role: 'system', content: c.system })
     for (const m of c.messages) {
-      if (m.error) continue
+      if (m.error && !m.tool_calls?.length) continue
+      if (m.role === 'tool') { out.push({ role: 'tool', tool_call_id: m.tool_call_id, content: m.content }); continue }
+      if (m.tool_calls?.length) { out.push({ role: 'assistant', content: m.content || '', tool_calls: m.tool_calls.map((x) => ({ id: x.id, type: 'function', function: { name: x.fn, arguments: x.args || '{}' } })) }); continue }
       if (m.images?.length) out.push({ role: m.role, content: [{ type: 'text', text: m.content }, ...m.images.map((u) => ({ type: 'image_url', image_url: { url: u } }))] })
       else out.push({ role: m.role, content: m.content })
     }
@@ -71,11 +90,13 @@
     if (c.messages.length === 1) c.title = input.slice(0, 40) || t('Изображение')
     input = ''
     images = []
+    rounds = 0
     await generate(c)
   }
   async function regenerate() {
     if (!cur || busy) return
-    while (cur.messages.length && cur.messages[cur.messages.length - 1].role === 'assistant') cur.messages.pop()
+    while (cur.messages.length && ['assistant', 'tool'].includes(cur.messages[cur.messages.length - 1].role)) cur.messages.pop()
+    rounds = 0
     await generate(cur)
   }
 
@@ -93,6 +114,7 @@
     try {
       const body: any = { model: c.model, stream: true, messages: payloadMessages({ ...c, messages: c.messages.slice(0, -1) }), temperature: temp, stream_options: { include_usage: true } }
       if (maxTokens > 0) body.max_tokens = maxTokens
+      if (useTools && tools.length) body.tools = tools.map((x) => ({ type: 'function', function: { name: x.function, description: `[${x.server}] ${x.description}`.slice(0, 1024), parameters: x.input_schema } }))
       const r = await raw('/api/v1/chat/completions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: ctrl.signal })
       if (!r.ok || !r.body) {
         const tx = await r.text()
@@ -121,6 +143,19 @@
           const d = j.choices?.[0]?.delta
           if (!d) continue
           // reasoning streamed separately (--reasoning-format deepseek) …
+          for (const tc of d.tool_calls || []) {
+            m.tool_calls ||= []
+            const k = tc.index ?? 0
+            if (!m.tool_calls[k]) {
+              const def = tools.find((x) => x.function === tc.function?.name)
+              m.tool_calls[k] = { id: tc.id || 'call_' + Math.random().toString(36).slice(2), fn: tc.function?.name || '', args: '', server_id: def?.server_id, tool: def?.name, server: def?.server, status: 'pending' }
+            }
+            const cc = m.tool_calls[k]
+            if (tc.function?.name && !cc.fn) cc.fn = tc.function.name
+            if (tc.function?.arguments) cc.args += tc.function.arguments
+            if (!firstTok) firstTok = performance.now()
+            if (m.thinking) { m.thinking = false; m.thinkOpen = false }
+          }
           const rc = d.reasoning_content ?? d.reasoning
           if (rc) { m.reasoning += rc; nTok++; if (!firstTok) firstTok = performance.now() }
           // … or inline <think> tags inside content
@@ -154,6 +189,41 @@
       ctrl = null
       persist()
     }
+    if (m.tool_calls?.length && !m.error) await runCalls(c, m)
+  }
+
+  async function runCalls(c: Conv, m: Msg) {
+    for (const call of m.tool_calls || []) {
+      const def = tools.find((x) => x.function === call.fn)
+      if (!def) { call.status = 'error'; call.result = 'Error: unknown tool ' + call.fn; continue }
+      Object.assign(call, { server_id: def.server_id, tool: def.name, server: def.server })
+      if (def.auto_approve && call.status === 'pending') await execCall(call)
+    }
+    await maybeContinue(c, m)
+  }
+  async function execCall(call: Call) {
+    call.status = 'running'
+    let args: any = {}
+    try { args = call.args ? JSON.parse(call.args) : {} } catch { call.status = 'error'; call.result = 'Error: invalid JSON arguments'; return }
+    try {
+      const r = await api.post('/api/mcp/call', { server_id: call.server_id, name: call.tool, arguments: args })
+      call.result = r.text + (r.images?.length ? `\n[${r.images.length} image(s)]` : '')
+      call.status = r.is_error ? 'error' : 'done'
+    } catch (e: any) { call.status = 'error'; call.result = 'Error: ' + e.message }
+  }
+  async function decide(c: Conv, m: Msg, call: Call, ok: boolean) {
+    if (ok) await execCall(call)
+    else { call.status = 'denied'; call.result = 'The user declined to run this tool.' }
+    await maybeContinue(c, m)
+  }
+  async function maybeContinue(c: Conv, m: Msg) {
+    const calls = m.tool_calls || []
+    if (calls.some((x) => x.status === 'pending' || x.status === 'running')) { persist(); return }
+    if (c.messages[c.messages.length - 1] !== m) return
+    for (const x of calls) c.messages.push({ role: 'tool', tool_call_id: x.id, content: x.result || '' })
+    persist()
+    if (++rounds > 10) return app.toast('error', t('Слишком много вызовов инструментов подряд'))
+    await generate(c)
   }
   function stop() {
     ctrl?.abort()
@@ -185,8 +255,16 @@
         </select>
         <span class="small dim">{models.find((m) => m.id === cur?.model)?.meta?.loaded ? t('загружена') : t('загрузится при первом запросе')}</span>
         <span class="sp"></span>
+        <label class="switch small" title={t('Инструменты MCP-серверов (Настройки → MCP)')}><input type="checkbox" checked={useTools} onchange={(e) => setTools((e.target as HTMLInputElement).checked)} /> 🔧 {t('Инструменты')}
+          {#if useTools}{#if toolsLoading}<span class="spin"></span>{:else}<span class="badge {tools.length ? 'ok' : ''}">{tools.length}</span>{/if}{/if}</label>
         <button class="sm" onclick={() => (showSettings = !showSettings)}>⚙ {t('Параметры')}</button>
       </div>
+      {#if useTools && !toolsLoading && (toolErrors.length || !tools.length)}
+        <div class="alert warn small" style="margin-bottom:8px">
+          {#if !tools.length && !toolErrors.length}{t('Нет подключённых MCP-серверов.')} <a href="#/settings">{t('Добавить в настройках')}</a>{/if}
+          {#each toolErrors as e}<div><b>{e.server}</b>: {e.error}</div>{/each}
+        </div>
+      {/if}
       {#if showSettings}
         <div class="card col" style="margin:8px 0">
           <label class="field"><span>{t('Системный промпт')}</span><textarea rows="3" bind:value={cur.system} onchange={persist} style="font-family:inherit"></textarea></label>
@@ -199,6 +277,7 @@
       <div class="msgs" bind:this={box}>
         {#if !cur.messages.length}<div class="empty">{t('Напишите сообщение. Ответ и размышления модели отображаются по мере генерации.')}</div>{/if}
         {#each cur.messages as m, i}
+          {#if m.role !== 'tool'}
           <div class="msg {m.role}">
             {#if m.images?.length}<div class="row">{#each m.images as u}<img src={u} alt="" class="thumb" />{/each}</div>{/if}
             {#if m.reasoning}
@@ -212,6 +291,22 @@
             {#each blocks(m.content) as b}
               {#if b.code}<pre class="code">{b.text}</pre>{:else if b.text}<div class="tx">{b.text}</div>{/if}
             {/each}
+            {#each m.tool_calls || [] as call}
+              <div class="call {call.status}">
+                <button class="ghost sm hdr" onclick={() => (call.open = !call.open)}>
+                  🔧 <b>{call.tool || call.fn}</b>{#if call.server}<span class="dim"> · {call.server}</span>{/if}
+                  <span class="dim mono ell" style="max-width:360px">{call.args}</span>
+                  <span class="sp"></span>
+                  {#if call.status === 'running'}<span class="spin"></span>{:else if call.status === 'done'}<span class="badge ok">✓</span>{:else if call.status === 'error'}<span class="badge bad">{t('ошибка')}</span>{:else if call.status === 'denied'}<span class="badge">{t('отклонён')}</span>{/if}
+                </button>
+                {#if call.status === 'pending' && !busy}
+                  <div class="row small" style="margin-top:6px"><span class="muted">{t('Модель хочет вызвать инструмент. Выполнить?')}</span><span class="sp"></span>
+                    <button class="sm primary" onclick={() => decide(cur!, m, call, true)}>{t('Выполнить')}</button><button class="sm" onclick={() => decide(cur!, m, call, false)}>{t('Отклонить')}</button></div>
+                {/if}
+                {#if call.open || call.status === 'pending'}<pre class="code small">{call.args}</pre>{/if}
+                {#if call.open && call.result}<pre class="code small res">{call.result}</pre>{/if}
+              </div>
+            {/each}
             {#if m.error}<div class="alert bad small">{m.error}</div>{/if}
             {#if m.role === 'assistant' && !m.thinking}
               <div class="row tiny dim meta">
@@ -222,6 +317,7 @@
               </div>
             {/if}
           </div>
+          {/if}
         {/each}
       </div>
       {#if images.length}<div class="row" style="margin-bottom:6px">{#each images as u, k}<button class="ghost" onclick={() => (images = images.filter((_, j) => j !== k))}><img src={u} alt="" class="thumb" /></button>{/each}</div>{/if}
@@ -252,5 +348,10 @@
   .meta { margin-top: 6px; }
   .thumb { width: 64px; height: 64px; object-fit: cover; border-radius: 6px; }
   .inp textarea { flex: 1; }
+  .call { border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px; margin: 6px 0; background: var(--bg3); }
+  .call.error { border-color: color-mix(in srgb, var(--bad) 50%, var(--line)); }
+  .call .hdr { width: 100%; justify-content: flex-start; gap: 6px; padding: 2px 0; }
+  .call pre { max-height: 240px; overflow: auto; margin: 4px 0; white-space: pre-wrap; }
+  .call .res { color: var(--fg2); }
   @media (max-width: 800px) { .chat { grid-template-columns: 1fr; } .list { display: none; } }
 </style>

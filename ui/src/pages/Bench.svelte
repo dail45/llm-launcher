@@ -4,6 +4,9 @@
   import { app } from '../lib/state.svelte'
   import { t } from '../lib/i18n.svelte'
   import { date } from '../lib/fmt'
+  import Quality from './Quality.svelte'
+
+  let tab = $state(location.hash.includes('quality') ? 'quality' : 'speed')
 
   let runs = $state<any[]>([])
   let models = $state<any[]>([])
@@ -67,6 +70,14 @@
 
 <h1>{t('Бенчмарки')}</h1>
 
+<div class="tabs">
+  <button class:on={tab === 'speed'} onclick={() => (tab = 'speed')}>⏱ {t('Скорость')}</button>
+  <button class:on={tab === 'quality'} onclick={() => (tab = 'quality')}>🎯 {t('Качество квантов')}</button>
+</div>
+
+{#if tab === 'quality'}
+  <Quality />
+{:else}
 <div class="card" style="margin-bottom:14px">
   <div class="grid g2">
     <label class="field"><span>{t('Модель')}</span>
@@ -121,3 +132,4 @@
   </table>
   {#if !shown.length}<div class="empty">{t('Результатов нет')}</div>{/if}
 </div>
+{/if}

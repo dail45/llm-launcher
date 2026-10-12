@@ -3,6 +3,7 @@
   import { app } from './lib/state.svelte'
   import { t, lang, setLang } from './lib/i18n.svelte'
   import { bytes } from './lib/fmt'
+  import { api } from './lib/api'
   import Toasts from './components/Toasts.svelte'
   import Dialogs from './components/Dialogs.svelte'
   import Login from './pages/Login.svelte'
@@ -93,6 +94,13 @@
       </div>
     </aside>
     <main>
+      {#if app.game.active}
+        <div class="gamebar small">
+          <span>🎮 <b>{t('Игровой режим')}</b>: {app.game.reason === 'manual' ? t('включён вручную') : app.game.reason} — {t('модели выгружены, автозагрузка приостановлена')}</span>
+          <span class="sp"></span>
+          <button class="sm" onclick={async () => { try { app.game = await api.post('/api/gamemode/deactivate') } catch (e) { app.err(e) } }}>{t('Выключить')}</button>
+        </div>
+      {/if}
       {#key path}
         {#if path === '/'}<Dashboard />
         {:else if seg[0] === 'presets' && seg[1]}<PresetEditor id={seg[1]} />

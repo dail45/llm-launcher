@@ -362,14 +362,14 @@
   .mob, .scrim { display: none; }
   .list { overflow: auto; gap: 2px; }
   .ci.on { background: var(--bg4); border-radius: 6px; }
-  .main { display: flex; flex-direction: column; min-height: 0; }
+  .main { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
   .top { margin-bottom: 8px; }
-  .msgs { flex: 1; overflow: auto; display: flex; flex-direction: column; gap: 12px; padding: 4px 4px 12px; }
-  .msg { max-width: 860px; padding: 10px 14px; border-radius: 12px; background: var(--bg2); border: 1px solid var(--line); }
+  .msgs { flex: 1; min-width: 0; overflow: auto; display: flex; flex-direction: column; gap: 12px; padding: 4px 4px 12px; }
+  .msg { min-width: 0; max-width: min(860px, 100%); overflow-wrap: anywhere; padding: 10px 14px; border-radius: 12px; background: var(--bg2); border: 1px solid var(--line); }
   .msg.user { align-self: flex-end; background: color-mix(in srgb, var(--acc) 14%, var(--bg2)); }
   .tx { white-space: pre-wrap; word-break: break-word; }
   /* rendered markdown */
-  .md { word-break: break-word; line-height: 1.55; }
+  .md { min-width: 0; overflow-wrap: anywhere; word-break: break-word; line-height: 1.55; }
   .md :global(> :first-child) { margin-top: 0; }
   .md :global(> :last-child) { margin-bottom: 0; }
   .md :global(p) { margin: 0 0 .6em; }
@@ -386,12 +386,15 @@
   .md :global(th), .md :global(td) { border: 1px solid var(--line); padding: 4px 9px; }
   .md :global(th) { background: var(--bg3); color: var(--fg); }
   .md :global(img) { max-width: 100%; }
-  .md :global(.cb) { margin: .5em 0 .7em; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--bg); }
+  .md :global(.cb) { min-width: 0; max-width: 100%; margin: .5em 0 .7em; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--bg); }
   .md :global(.cbh) { display: flex; align-items: center; justify-content: space-between; padding: 3px 6px 3px 10px; background: var(--bg3); border-bottom: 1px solid var(--line); font-size: 12px; color: var(--fg3); font-family: var(--mono); }
-  .md :global(.cbcopy) { padding: 2px 8px; font-size: 12px; background: transparent; border-color: transparent; color: var(--fg2); }
+  .md :global(.cbh > span) { min-width: 0; overflow-wrap: anywhere; }
+  .md :global(.cbcopy) { flex-shrink: 0; padding: 2px 8px; font-size: 12px; background: transparent; border-color: transparent; color: var(--fg2); }
   .md :global(.cbcopy:hover) { background: var(--bg4); color: var(--fg); }
   .md :global(.cbcopy.done) { color: var(--ok); }
-  .md :global(.cb pre) { margin: 0; border: 0; border-radius: 0; padding: 10px 12px; white-space: pre; overflow-x: auto; word-break: normal; background: transparent; }
+  /* Preserve indentation/newlines but wrap even a single token longer than the screen.
+     CSS-only wrapping keeps the original code intact when copied. */
+  .md :global(.cb pre) { min-width: 0; max-width: 100%; margin: 0; border: 0; border-radius: 0; padding: 10px 12px; white-space: pre-wrap; overflow-wrap: anywhere; overflow-x: auto; word-break: normal; background: transparent; }
   .code { margin: 6px 0; }
   .think { margin-bottom: 6px; border-left: 3px solid var(--fg3); padding-left: 10px; }
   .think summary { cursor: pointer; color: var(--fg2); }
@@ -405,7 +408,7 @@
   .call pre { max-height: 240px; overflow: auto; margin: 4px 0; white-space: pre-wrap; }
   .call .res { color: var(--fg2); }
   @media (max-width: 800px) {
-    .chat { grid-template-columns: 1fr; }
+    .chat { grid-template-columns: minmax(0, 1fr); }
     .list { display: none; }
     .list.open { display: flex; position: fixed; z-index: 40; left: 0; top: 0; bottom: 0; width: min(300px, 82vw); background: var(--bg2); border-right: 1px solid var(--line); padding: calc(12px + env(safe-area-inset-top)) 10px 12px; box-shadow: 0 0 40px rgba(0, 0, 0, .5); }
     .scrim { display: block; position: fixed; inset: 0; z-index: 39; background: rgba(0, 0, 0, .45); border: 0; border-radius: 0; padding: 0; }
@@ -415,7 +418,7 @@
     .top { flex-wrap: nowrap; gap: 6px; }
     .top .sp { display: none; }
     .msg { max-width: 100%; padding: 8px 11px; }
-    .msg.user { margin-left: 28px; }
+    .msg.user { max-width: calc(100% - 28px); margin-left: 28px; }
     .msgs { gap: 9px; padding: 2px 0 10px; }
     .call .hdr .mono { display: none; }
     .inp { gap: 4px; }

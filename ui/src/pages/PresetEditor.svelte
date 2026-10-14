@@ -50,7 +50,7 @@
   const unknownArgs = $derived(p ? Object.keys(p.args).filter((k) => !schema.params.some((d: any) => d.id === k)) : [])
 
   function blank() {
-    return { id: '', name: '', model_id: '', backend_id: '', args: {}, extra_args: '', env: {}, devices: [], mmproj_id: null, draft_model_id: null, lora_ids: [], ttl: null, pinned: false, autostart: false, required_features: [], group: '', icon: null, color: null, hotkey: null, order: 0, notes: '' }
+    return { id: '', name: '', model_id: '', backend_id: '', args: {}, extra_args: '', system_prompt: '', system_prompt_append: false, env: {}, devices: [], mmproj_id: null, draft_model_id: null, lora_ids: [], ttl: null, pinned: false, autostart: false, required_features: [], group: '', icon: null, color: null, hotkey: null, order: 0, notes: '' }
   }
 
   onMount(async () => {
@@ -257,6 +257,18 @@
             </div>
           </div>
         {/if}
+      </div>
+
+      <div class="card col">
+        <h3 style="margin:0">{t('Системный промпт')}</h3>
+        <label class="field"><span>{t('Инструкции для модели')}</span>
+          <textarea rows="5" bind:value={p.system_prompt} oninput={() => (dirty = true)} placeholder={t('Пусто — не добавлять инструкции пресета')} style="font-family:inherit"></textarea>
+        </label>
+        <label class="switch"><input type="checkbox" bind:checked={p.system_prompt_append} onchange={() => (dirty = true)} /> {t('Добавлять к промпту клиента')}</label>
+        <div class="hint small muted">{p.system_prompt_append
+          ? t('Сначала инструкции пресета, затем системный промпт чата или API-клиента. Оба сохраняются.')
+          : t('Промпт пресета используется, только если чат или API-клиент не передал свой системный промпт.')}</div>
+        <div class="small dim">{t('Применяется к следующему запросу через лаунчер без перезапуска модели.')}</div>
       </div>
 
       <div class="card">

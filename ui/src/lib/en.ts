@@ -619,5 +619,12 @@ export const EN: Record<string, string> = {
  "Скачать и установить": "Download and install",
  "exe будет заменён новым, лаунчер перезапустится. Запущенные модели остановятся.": "The exe will be replaced and the launcher restarted. Running models will stop.",
  "Установщик обновит программу без вопросов, затем лаунчер запустится снова. Запущенные модели остановятся.": "The installer updates the app silently, then the launcher starts again. Running models will stop.",
- "Обновление": "Update"
+ "Обновление": "Update",
+ "Инструкции для модели": "Model instructions",
+ "Пусто — не добавлять инструкции пресета": "Leave empty to disable preset instructions",
+ "Добавлять к промпту клиента": "Add to the client prompt",
+ "Сначала инструкции пресета, затем системный промпт чата или API-клиента. Оба сохраняются.": "Preset instructions first, then the chat or API client's system prompt. Both are preserved.",
+ "Промпт пресета используется, только если чат или API-клиент не передал свой системный промпт.": "The preset prompt is used only when the chat or API client supplies no system prompt.",
+ "Применяется к следующему запросу через лаунчер без перезапуска модели.": "Applies to the next request through the launcher without restarting the model.",
+ "Пусто — использовать промпт пресета. Объединение со своим промптом настраивается в пресете.": "Leave empty to use the preset prompt. Combining it with your prompt is configured in the preset."
 }

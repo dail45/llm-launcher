@@ -126,6 +126,11 @@ pub struct Preset {
     /// param id (e.g. "--ctx-size") -> value (bool/number/string/array)
     pub args: BTreeMap<String, Value>,
     pub extra_args: String,
+    /// Default instructions for chat requests routed to this preset.
+    pub system_prompt: String,
+    /// Prepend preset instructions to the client's system/developer prompt.
+    /// False: use the preset prompt only when the client supplies neither role.
+    pub system_prompt_append: bool,
     pub env: BTreeMap<String, String>,
     /// backend device ids (e.g. ["CUDA0","CUDA1"]); empty = all
     pub devices: Vec<String>,

@@ -308,9 +308,59 @@ pub struct Upstream {
     pub body: ByteStream,
 }
 
+/// Apply instructions to one request only. Never modify stored chat history or
+/// collapse the client's other instruction messages, tools or multimodal parts.
+pub(crate) fn apply_system_prompt(req: &mut Value, prompt: &str, append: bool) -> bool {
+    if prompt.trim().is_empty() {
+        return false;
+    }
+    let Some(messages) = req.get_mut("messages").and_then(Value::as_array_mut) else { return false };
+    let instruction = messages.iter().position(|m| matches!(m.get("role").and_then(Value::as_str), Some("system" | "developer")));
+    if let Some(i) = instruction {
+        if !append {
+            return false;
+        }
+        let Some(content) = messages[i].get_mut("content") else { return false };
+        match content {
+            Value::String(text) => {
+                *text = if text.is_empty() { prompt.to_string() } else { format!("{prompt}\n\n{text}") };
+            }
+            Value::Array(parts) => parts.insert(0, json!({"type": "text", "text": format!("{prompt}\n\n")})),
+            Value::Null => *content = json!(prompt),
+            _ => return false, // leave invalid requests to upstream validation
+        }
+    } else {
+        messages.insert(0, json!({"role": "system", "content": prompt}));
+    }
+    true
+}
+
+/// Read the selected preset at request time, so edits work without restarting
+/// llama-server and alias groups use the actual candidate's instructions.
+pub(crate) fn apply_preset_system_prompt(app: &AppRef, inst: &Instance, req: &mut Value) -> Result<bool, String> {
+    let id = inst.info.read().id.clone();
+    let preset = app.store.get::<crate::types::Preset>("presets", &id).map_err(|e| e.to_string())?;
+    Ok(preset.map(|p| apply_system_prompt(req, &p.system_prompt, p.system_prompt_append)).unwrap_or(false))
+}
+
 /// Send a request to llama-server; usage is parsed from the (upstream, OpenAI-format) body tail
 /// when the returned stream is dropped.
 pub async fn forward_raw(app: &AppRef, inst: Arc<Instance>, method: Method, path: &str, headers: &HeaderMap, body: Bytes, ctx: LogCtx) -> Result<Upstream, String> {
+    // Centralized here: UI, OpenAI, native instance proxy and converted Anthropic
+    // messages all pass through exactly once. Raw completions/embeddings are untouched.
+    let body = if method == Method::POST && matches!(path.split('?').next(), Some("/v1/chat/completions" | "/chat/completions")) {
+        if let Ok(mut req) = serde_json::from_slice::<Value>(&body) {
+            if apply_preset_system_prompt(app, &inst, &mut req)? {
+                Bytes::from(req.to_string())
+            } else {
+                body
+            }
+        } else {
+            body
+        }
+    } else {
+        body
+    };
     let url = format!("{}{}", inst.base_url(), path);
     inst.active.fetch_add(1, Ordering::Relaxed);
     inst.touch();
@@ -321,7 +371,8 @@ pub async fn forward_raw(app: &AppRef, inst: Arc<Instance>, method: Method, path
     let client = reqwest::Client::new();
     let mut rb = client.request(reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap_or(reqwest::Method::POST), &url);
     for (k, v) in headers {
-        if !hop_by_hop(k.as_str()) && !k.as_str().starts_with("anthropic-") {
+        // reqwest computes the correct length after request-body rewriting.
+        if !hop_by_hop(k.as_str()) && k.as_str() != "content-length" && !k.as_str().starts_with("anthropic-") {
             rb = rb.header(k.as_str(), v.as_bytes());
         }
     }
@@ -380,6 +431,91 @@ pub async fn forward(app: &AppRef, inst: Arc<Instance>, method: Method, path: &s
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn preset_prompt_legacy_defaults_and_roundtrip() {
+        let mut p: crate::types::Preset = serde_json::from_value(json!({"name": "old preset"})).unwrap();
+        assert!(p.system_prompt.is_empty());
+        assert!(!p.system_prompt_append);
+        p.system_prompt = "Ты помощник.\nОтвечай кратко.".into();
+        p.system_prompt_append = true;
+        let loaded: crate::types::Preset = serde_json::from_value(serde_json::to_value(&p).unwrap()).unwrap();
+        assert_eq!(loaded.system_prompt, p.system_prompt);
+        assert!(loaded.system_prompt_append);
+    }
+    #[test]
+    fn preset_prompt_default_preserves_payload() {
+        let mut req = json!({"messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}]}], "stream": true, "tools": [{"type": "function"}], "temperature": 0.2});
+        let orig = req.clone();
+        assert!(apply_system_prompt(&mut req, "Preset\ninstructions", false));
+        assert_eq!(req["messages"][0], json!({"role": "system", "content": "Preset\ninstructions"}));
+        assert_eq!(req["messages"][1], orig["messages"][0]);
+        assert_eq!(req["tools"], orig["tools"]);
+        assert_eq!(req["stream"], orig["stream"]);
+        assert_eq!(req["temperature"], orig["temperature"]);
+        assert!(apply_system_prompt(&mut json!({"messages": []}), "Preset", false));
+    }
+    #[test]
+    fn preset_prompt_client_instructions_win_even_when_empty() {
+        for role in ["system", "developer"] {
+            for content in [json!("Client"), json!(""), json!([{"type": "text", "text": "Client"}]), Value::Null] {
+                let mut req = json!({"messages": [{"role": role, "content": content}, {"role": "user", "content": "Hi"}]});
+                let orig = req.clone();
+                assert!(!apply_system_prompt(&mut req, "Preset", false));
+                assert_eq!(req, orig);
+            }
+        }
+    }
+    #[test]
+    fn preset_prompt_append_merges_without_extra_instruction_messages() {
+        for role in ["system", "developer"] {
+            let mut req = json!({"messages": [{"role": role, "content": "Client"}, {"role": "system", "content": "More"}, {"role": "user", "content": "Hi"}]});
+            assert!(apply_system_prompt(&mut req, "Preset", true));
+            assert_eq!(req["messages"].as_array().unwrap().len(), 3);
+            assert_eq!(req["messages"][0], json!({"role": role, "content": "Preset\n\nClient"}));
+            assert_eq!(req["messages"][1]["content"], "More");
+        }
+        let mut empty = json!({"messages": [{"role": "system", "content": ""}]});
+        assert!(apply_system_prompt(&mut empty, "Preset", true));
+        assert_eq!(empty["messages"][0]["content"], "Preset");
+    }
+    #[test]
+    fn preset_prompt_append_preserves_content_blocks() {
+        let original = json!({"type": "text", "text": "Client", "cache_control": {"type": "ephemeral"}});
+        let mut req = json!({"messages": [{"role": "system", "content": [original.clone()]}]});
+        assert!(apply_system_prompt(&mut req, "Preset", true));
+        assert_eq!(req["messages"][0]["content"], json!([{"type": "text", "text": "Preset\n\n"}, original]));
+    }
+    #[test]
+    fn preset_prompt_noop_and_request_history_unchanged() {
+        for mut req in [json!({}), json!({"prompt": "Raw completion"}), json!({"messages": null})] {
+            let orig = req.clone();
+            assert!(!apply_system_prompt(&mut req, "Preset", true));
+            assert_eq!(req, orig);
+        }
+        let history = json!({"messages": [{"role": "user", "content": "Hi"}]});
+        for prompt in ["", " \n\t"] {
+            let mut req = history.clone();
+            assert!(!apply_system_prompt(&mut req, prompt, true));
+            assert_eq!(req, history);
+        }
+        for _ in 0..3 {
+            let mut req = history.clone();
+            apply_system_prompt(&mut req, "Preset", true);
+            assert_eq!(req["messages"].as_array().unwrap().len(), 2);
+        }
+        assert_eq!(history["messages"].as_array().unwrap().len(), 1);
+    }
+    #[test]
+    fn preset_prompt_anthropic_conversion_and_overrides() {
+        let mut req = crate::anthropic::to_openai(&json!({"messages": [{"role": "user", "content": "Hi"}]}));
+        assert!(apply_system_prompt(&mut req, "Preset", false));
+        for system in [json!(""), json!([]), json!([{"type": "text", "text": "Client"}])] {
+            let mut req = crate::anthropic::to_openai(&json!({"system": system, "messages": [{"role": "user", "content": "Hi"}]}));
+            assert!(!apply_system_prompt(&mut req, "Preset", false));
+            assert!(apply_system_prompt(&mut req, "Preset", true));
+            assert!(req["messages"][0]["content"].as_str().unwrap().starts_with("Preset"));
+        }
+    }
     #[test]
     fn usage_from_stream_timings() {
         let t = "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\ndata: {\"choices\":[],\"timings\":{\"cache_n\":90,\"prompt_n\":10,\"predicted_n\":7,\"predicted_per_second\":42.5}}\n\ndata: [DONE]\n\n";

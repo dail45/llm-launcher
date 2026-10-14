@@ -291,7 +291,8 @@
       {/if}
       {#if showSettings}
         <div class="card col" style="margin:8px 0">
-          <label class="field"><span>{t('Системный промпт')}</span><textarea rows="3" bind:value={cur.system} onchange={persist} style="font-family:inherit"></textarea></label>
+          <label class="field"><span>{t('Системный промпт')}</span><textarea rows="3" bind:value={cur.system} onchange={persist} style="font-family:inherit"></textarea>
+            <span class="hint">{t('Пусто — использовать промпт пресета. Объединение со своим промптом настраивается в пресете.')}</span></label>
           <div class="row">
             <label class="row small">temperature <input type="range" min="0" max="2" step="0.05" bind:value={temp} /> {temp}</label>
             <label class="row small">max_tokens <input type="number" bind:value={maxTokens} style="width:90px" placeholder="0 = ∞" /></label>

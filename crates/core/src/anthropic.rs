@@ -58,7 +58,7 @@ pub fn to_openai(req: &Value) -> Value {
     let mut msgs: Vec<Value> = vec![];
     if let Some(sys) = req.get("system") {
         let t = text_of(sys);
-        if !t.is_empty() {
+        if !sys.is_null() {
             msgs.push(json!({"role": "system", "content": t}));
         }
     }
@@ -422,12 +422,15 @@ pub async fn count_tokens(State(app): State<AppRef>, req: Request) -> Response {
         Err(r) => return r,
     };
     let model = v.get("model").and_then(|m| m.as_str()).unwrap_or("").to_string();
-    let oai = to_openai(&v);
-    let fallback = || Json(json!({"input_tokens": (oai.to_string().len() / 4) as u64})).into_response();
+    let mut oai = to_openai(&v);
     let (_alias, inst) = match pick_instance(&app, &p, Some(&model)).await {
         Ok(x) => x,
-        Err(_) => return fallback(),
+        Err(_) => return Json(json!({"input_tokens": (oai.to_string().len() / 4) as u64})).into_response(),
     };
+    if let Err(e) = crate::router::apply_preset_system_prompt(&app, &inst, &mut oai) {
+        return err(StatusCode::INTERNAL_SERVER_ERROR, "api_error", &e);
+    }
+    let fallback = || Json(json!({"input_tokens": (oai.to_string().len() / 4) as u64})).into_response();
     let client = reqwest::Client::new();
     let base = inst.base_url();
     let tmpl = client.post(format!("{base}/apply-template")).json(&json!({"messages": oai["messages"], "tools": oai.get("tools")})).send().await;

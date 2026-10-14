@@ -58,6 +58,7 @@ check "anthropic tool_use" "$(echo "$AT" | j 'd["stop_reason"], d["content"][0][
 AR=$(curl -s -XPOST $RT/v1/messages -H 'content-type: application/json' -d '{"model":"coder","max_tokens":50,"tools":[{"name":"echo","input_schema":{"type":"object"}}],"messages":[{"role":"user","content":"use tool"},{"role":"assistant","content":[{"type":"tool_use","id":"call_1","name":"echo","input":{"text":"ping"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":"pong"}]}]}')
 check "anthropic tool_result" "$(echo "$AR" | j 'd["content"][0]["text"]')" "tool said: pong"
 check "anthropic count_tokens" "$(curl -s -XPOST $RT/v1/messages/count_tokens -H 'content-type: application/json' -d '{"model":"coder","messages":[{"role":"user","content":"one two three"}]}' | j 'd["input_tokens"]')" "3"
+python3 "$ROOT/tests/system_prompt.py" "$API" "$RT" "$PID1" || fail=1
 check "anthropic error format" "$(curl -s -XPOST $RT/v1/messages -H 'content-type: application/json' -d '{"model":"nope","max_tokens":5,"messages":[]}' | j 'd["type"], d["error"]["type"]')" "error not_found_error"
 echo "  .. waiting for TTL unload"; sleep 10
 check "ttl unloaded" "$(curl -s $API/instances | j 'd[0]["state"]')" "stopped"
@@ -95,7 +96,7 @@ check "usage csv" "$(curl -s "$API/analytics/export?from=0&to=99999999999" | hea
 check "export" "$(curl -s $API/presets/export | j 'len(d["presets"])')" "2"
 check "backup zip" "$(curl -s $API/backup | head -c 2)" "PK"
 check "ui served" "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8090/)" "200"
-check "version" "$(curl -s $API/version | j 'd["version"]')" "$(grep -m1 '^version' ../Cargo.toml | cut -d'"' -f2)"
+check "version" "$(curl -s $API/version | j 'd["version"]')" "$(grep -m1 '^version' "$ROOT/Cargo.toml" | cut -d'"' -f2)"
 # game mode: a process from the list unloads models and blocks autoload
 curl -s -XPUT $API/settings -H 'content-type: application/json' -d '{"game_processes":["fakegame.exe"],"game_grace_secs":1}' >/dev/null
 curl -s -XPOST $RT/v1/chat/completions -d '{"model":"coder"}' >/dev/null

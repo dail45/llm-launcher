@@ -7,7 +7,7 @@
     "strict": false,
     "noImplicitAny": false,
     "skipLibCheck": true,
-    "types": ["svelte"],
+    "types": ["svelte", "vite/client"],
     "verbatimModuleSyntax": true,
     "isolatedModules": true
   },

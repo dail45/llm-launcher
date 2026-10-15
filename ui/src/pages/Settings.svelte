@@ -94,7 +94,7 @@
     } catch (e) { app.err(e) }
   }
   onMount(load)
-  const dirty = $derived(s && (JSON.stringify(s) !== orig || gameText !== (s.game_processes || []).join('\n') || ignoreText !== (s.game_ignore || []).join('\n')))
+  const dirty = $derived(s && (JSON.stringify(s) !== orig || cacheText !== Object.entries(s.custom_cache_bits || {}).map(([k, v]) => `${k}=${v}`).join('\n') || gameText !== (s.game_processes || []).join('\n') || ignoreText !== (s.game_ignore || []).join('\n')))
 
   async function save() {
     const bits: Record<string, number> = {}

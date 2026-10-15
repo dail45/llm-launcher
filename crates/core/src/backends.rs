@@ -102,7 +102,7 @@ pub async fn scan(mut b: Backend) -> Result<(Backend, ParamSchema)> {
         }
     };
     b.bin_hash = Some(hash);
-    let devs = run_capture(&bin, &["--list-devices"], Duration::from_secs(30)).await.unwrap_or_default();
+    let devs = run_capture(&bin, &["--list-devices"], Duration::from_secs(60)).await.unwrap_or_default();
     b.devices = help_parser::parse_devices(&devs);
     if b.kind == BackendKind::Other {
         let k = b.devices.first().map(|d| BackendKind::guess(&d.id)).unwrap_or_default();

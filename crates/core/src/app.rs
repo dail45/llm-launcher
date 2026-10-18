@@ -192,8 +192,8 @@ impl App {
         let mut inp = args::mem_input_from_preset(p, schema.as_deref(), devices);
         self.fill_mem_defaults(&mut inp, &backend);
         let mut extra = 0;
-        for mid in [p.mmproj_id.clone().or(model.mmproj_id.clone()), p.draft_model_id.clone()].into_iter().flatten() {
-            if let Ok(m) = self.model(&mid) {
+        for mid in [p.effective_mmproj_id(&model), p.draft_model_id.as_deref()].into_iter().flatten() {
+            if let Ok(m) = self.model(mid) {
                 extra += m.size;
             }
         }
@@ -225,11 +225,7 @@ impl App {
         }
         let model = self.model(&p.model_id)?;
         let schema = self.schema(&backend);
-        let mmproj_id = p.mmproj_id.clone().or(model.mmproj_id.clone()).filter(|s| !s.is_empty() && s != "none");
-        let mmproj = match mmproj_id {
-            Some(id) if p.mmproj_id.as_deref() != Some("none") => self.model(&id).ok(),
-            _ => None,
-        };
+        let mmproj = p.effective_mmproj_id(&model).and_then(|id| self.model(id).ok());
         let draft = p.draft_model_id.as_ref().and_then(|id| self.model(id).ok());
         let loras: Vec<Model> = p.lora_ids.iter().filter_map(|id| self.model(id).ok()).collect();
         let alias = self.primary_alias(&p.id).or_else(|| Some(model.alias.clone()));
@@ -578,5 +574,47 @@ impl App {
 
     pub fn instance_logs(&self, id: &str, tail: usize) -> Result<Vec<crate::process::LogLine>> {
         Ok(self.pm.get(id).context("инстанс не найден")?.logs(tail))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn mmproj_disabled_auto_and_explicit_match_command_and_memory() {
+        let app = App::with_store(Store::memory().unwrap()).unwrap();
+        let backend = Backend { id: "backend".into(), server_bin: "llama-server".into(), ..Default::default() };
+        let model = Model {
+            id: "model".into(), alias: "vision".into(), paths: vec!["model.gguf".into()], size: 1024,
+            mmproj_id: Some("projector".into()),
+            info: crate::gguf::ModelInfo { n_layers: 4, n_embd: 256, n_head: 8, n_vocab: 1000, ..Default::default() },
+            ..Default::default()
+        };
+        app.store.put("backends", &backend.id, &backend).unwrap();
+        app.store.put("models", &model.id, &model).unwrap();
+        for (id, size) in [("projector", 4096), ("other-projector", 8192)] {
+            let m = Model { id: id.into(), paths: vec![format!("{id}.gguf")], size, ..Default::default() };
+            app.store.put("models", id, &m).unwrap();
+        }
+        for (selection, expected, extra) in [
+            (None, Some("projector"), 4096),
+            (Some("none"), None, 0),
+            (Some(""), None, 0),
+            (Some("other-projector"), Some("other-projector"), 8192),
+            (Some("missing-projector"), Some("missing-projector"), 0),
+        ] {
+            let p = Preset { model_id: model.id.clone(), backend_id: backend.id.clone(), mmproj_id: selection.map(String::from), ..Default::default() };
+            assert_eq!(p.effective_mmproj_id(&model), expected);
+            let spec = app.launch_spec(&p, 51000).unwrap();
+            let mp = spec.args.windows(2).find(|a| a[0] == "--mmproj").map(|a| a[1].as_str());
+            assert_eq!(mp, expected.filter(|_| extra > 0).map(|id| format!("{id}.gguf")).as_deref());
+            let estimate = app.estimate_preset(&p, false).unwrap();
+            assert_eq!(estimate.cpu.extra + estimate.devices.iter().map(|d| d.usage.extra).sum::<u64>(), extra);
+            let restored: Preset = serde_json::from_value(serde_json::to_value(&p).unwrap()).unwrap();
+            assert_eq!(restored.effective_mmproj_id(&model), expected);
+        }
+        let no_projector = Model { mmproj_id: None, ..model.clone() };
+        assert_eq!(Preset::default().effective_mmproj_id(&no_projector), None);
     }
 }

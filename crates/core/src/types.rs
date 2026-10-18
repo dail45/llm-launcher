@@ -134,6 +134,7 @@ pub struct Preset {
     pub env: BTreeMap<String, String>,
     /// backend device ids (e.g. ["CUDA0","CUDA1"]); empty = all
     pub devices: Vec<String>,
+    /// None = inherit from the model; "none" (or legacy "") = explicitly disabled.
     pub mmproj_id: Option<String>,
     pub draft_model_id: Option<String>,
     pub lora_ids: Vec<String>,
@@ -151,6 +152,13 @@ pub struct Preset {
     pub notes: String,
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+impl Preset {
+    /// Use the same projector selection for launch commands and memory estimates.
+    pub fn effective_mmproj_id<'a>(&'a self, model: &'a Model) -> Option<&'a str> {
+        self.mmproj_id.as_deref().or(model.mmproj_id.as_deref()).filter(|id| !id.is_empty() && *id != "none")
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

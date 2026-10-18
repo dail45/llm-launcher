@@ -620,6 +620,8 @@ export const EN: Record<string, string> = {
  "exe будет заменён новым, лаунчер перезапустится. Запущенные модели остановятся.": "The exe will be replaced and the launcher restarted. Running models will stop.",
  "Установщик обновит программу без вопросов, затем лаунчер запустится снова. Запущенные модели остановятся.": "The installer updates the app silently, then the launcher starts again. Running models will stop.",
  "Обновление": "Update",
+ "Авто (из настроек модели)": "Auto (from model settings)",
+ "Без mmproj": "No mmproj",
  "Инструкции для модели": "Model instructions",
  "Пусто — не добавлять инструкции пресета": "Leave empty to disable preset instructions",
  "Добавлять к промпту клиента": "Add to the client prompt",

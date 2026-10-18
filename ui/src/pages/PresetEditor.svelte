@@ -87,6 +87,7 @@
         const pa = a.find((x: any) => x.target_type === 'preset' && x.target_id === id && x.is_primary)
         alias = origAlias = pa?.name || ''
       }
+      if (pr.mmproj_id === '') pr.mmproj_id = 'none'
       envText = Object.entries(pr.env || {}).map(([k, v]) => `${k}=${v}`).join('\n')
       p = pr
     } catch (e) { app.err(e) }
@@ -134,7 +135,6 @@
   }
   function onModel() {
     if (!p.name && model) p.name = model.alias
-    if (model?.mmproj_id && !p.mmproj_id) p.mmproj_id = model.mmproj_id
     dirty = true
   }
   function parseEnv() {
@@ -239,7 +239,8 @@
           </label>
           <label class="field"><span>mmproj ({t('зрение/аудио')})</span>
             <select bind:value={p.mmproj_id} onchange={() => (dirty = true)}>
-              <option value={null}>—</option>
+              <option value={null}>{t('Авто (из настроек модели)')}</option>
+              <option value="none">— {t('Без mmproj')}</option>
               {#each mmprojs as m}<option value={m.id}>{m.file_name}</option>{/each}
             </select></label>
           <label class="field"><span>{t('Draft-модель (speculative)')}</span>
